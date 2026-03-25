@@ -1,0 +1,24 @@
+{
+  "name": "@xpoch/server",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@xpoch/shared": "workspace:*",
+    "@xpoch/engine": "workspace:*",
+    "@xpoch/ai-adapter": "workspace:*",
+    "express": "^4.21.0",
+    "ws": "^8.18.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/ws": "^8.5.0",
+    "@types/cors": "^2.8.0",
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@xpoch/ai-adapter",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@xpoch/shared": "workspace:*",
+    "@xpoch/engine": "workspace:*",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^4.80.0"
+  }
+}

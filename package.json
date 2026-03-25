@@ -1,0 +1,15 @@
+{
+  "name": "xpoch",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "concurrently \"npx pnpm --filter @xpoch/server dev\" \"npx pnpm --filter @xpoch/client dev\"",
+    "build": "npx pnpm --filter @xpoch/client build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.1"
+  }
+}
