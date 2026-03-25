@@ -7,7 +7,12 @@ describe("narrate", () => {
     const state = createInitialState(5, 42, [
       { id: "f1", name: "Alpha", modelProvider: "mock", color: "#f00" },
     ]);
-    const entry = { tick: 3, message: "Alpha conquered 1,0", involvedFactions: ["f1"] as readonly string[] };
+    const entry = {
+      tick: 3,
+      message: "Alpha conquered city",
+      category: "combat" as const,
+      involvedFactions: ["f1"] as readonly string[]
+    };
     const text = narrate(entry, state);
     expect(text).toContain("Tick 3");
     expect(text).toContain("conquered");
@@ -15,7 +20,7 @@ describe("narrate", () => {
 });
 
 describe("generateSummary", () => {
-  it("includes all alive factions", () => {
+  it("includes all alive factions with cities and units", () => {
     const state = createInitialState(5, 42, [
       { id: "f1", name: "Alpha", modelProvider: "mock", color: "#f00" },
       { id: "f2", name: "Beta", modelProvider: "mock", color: "#0f0" },

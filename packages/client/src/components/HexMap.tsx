@@ -1,15 +1,14 @@
 import { useRef, useEffect, useState, useCallback } from "react";
-import type { Tile, Faction } from "@xpoch/shared";
+import type { ClientGameState } from "../hooks/use-game-state";
 import { renderHexMap } from "./HexMapRenderer";
 
 interface HexMapProps {
-  readonly tiles: ReadonlyMap<string, Tile>;
-  readonly factions: ReadonlyMap<string, Faction>;
+  readonly state: ClientGameState;
 }
 
 const HEX_SIZE = 28;
 
-export function HexMap({ tiles, factions }: HexMapProps) {
+export function HexMap({ state }: HexMapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -25,12 +24,12 @@ export function HexMap({ tiles, factions }: HexMapProps) {
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
-    renderHexMap(ctx, tiles, factions, {
+    renderHexMap(ctx, state, {
       hexSize: HEX_SIZE,
       offsetX: canvas.clientWidth / 2 + offset.x,
       offsetY: canvas.clientHeight / 2 + offset.y,
     });
-  }, [tiles, factions, offset]);
+  }, [state, offset]);
 
   useEffect(() => {
     draw();

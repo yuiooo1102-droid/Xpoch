@@ -17,7 +17,6 @@ describe("Integration: full game loop with mock AI", () => {
     ]);
     const state = createInitialState(8, 42, factions);
     const updates: any[] = [];
-
     const loop = new GameLoop(state, adapters, (s) => updates.push(s));
 
     for (let i = 0; i < 10; i++) {
@@ -27,9 +26,11 @@ describe("Integration: full game loop with mock AI", () => {
     expect(updates.length).toBe(10);
     expect(loop.getState().tick).toBe(10);
 
+    // All factions should still have valid state
     for (const faction of loop.getState().factions.values()) {
       expect(typeof faction.gold).toBe("number");
       expect(typeof faction.food).toBe("number");
+      expect(typeof faction.research).toBe("number");
     }
   });
 
@@ -43,7 +44,6 @@ describe("Integration: full game loop with mock AI", () => {
       ["f2", new MockAdapter()],
     ]);
     const state = createInitialState(5, 42, factions);
-
     const loop = new GameLoop(state, adapters, () => {});
 
     for (let i = 0; i < 5; i++) {
@@ -63,10 +63,9 @@ describe("Integration: full game loop with mock AI", () => {
       ["f2", new MockAdapter()],
     ]);
     const state = createInitialState(5, 42, factions);
-
     const snapshots: any[] = [];
     const loop = new GameLoop(state, adapters, (s) =>
-      snapshots.push(JSON.parse(JSON.stringify(s)))
+      snapshots.push(JSON.parse(JSON.stringify(s, replacer)))
     );
 
     await loop.tick();
@@ -76,3 +75,9 @@ describe("Integration: full game loop with mock AI", () => {
     expect(snapshots[1].tick).toBe(2);
   });
 });
+
+// Helper to serialize Maps in JSON
+function replacer(_key: string, value: any) {
+  if (value instanceof Map) return Object.fromEntries(value);
+  return value;
+}

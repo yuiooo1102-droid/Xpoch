@@ -69,12 +69,17 @@ export function App() {
 
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1">
-          <HexMap tiles={state.tiles} factions={state.factions} />
+          <HexMap state={state} />
         </div>
 
         <div className="w-80 border-l border-gray-700 flex flex-col bg-gray-900/50">
           <div className="flex-none">
-            <FactionPanel factions={state.factions} tiles={state.tiles} />
+            <FactionPanel
+              factions={state.factions}
+              tiles={state.tiles}
+              units={state.units}
+              cities={state.cities}
+            />
           </div>
           <div className="flex-1 border-t border-gray-700 overflow-hidden">
             <BattleLog entries={state.log} />

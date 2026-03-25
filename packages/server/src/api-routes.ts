@@ -72,7 +72,10 @@ export function createApiRoutes(
       state: {
         ...state,
         tiles: Object.fromEntries(state.tiles),
+        units: Object.fromEntries(state.units),
+        cities: Object.fromEntries(state.cities),
         factions: Object.fromEntries(state.factions),
+        wonders: state.wonders,
         diplomacy: { relations: Object.fromEntries(state.diplomacy.relations) },
       },
     });

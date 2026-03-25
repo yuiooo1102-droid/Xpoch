@@ -14,18 +14,16 @@ describe("GameLoop", () => {
       ["f2", new MockAdapter()],
     ]);
     const initialState = createInitialState(5, 42, factions);
-
     const onUpdate = vi.fn();
     const loop = new GameLoop(initialState, adapters, onUpdate);
 
     await loop.tick();
 
     expect(onUpdate).toHaveBeenCalled();
-    const newState = loop.getState();
-    expect(newState.tick).toBe(1);
+    expect(loop.getState().tick).toBe(1);
   });
 
-  it("detects winner and stops", async () => {
+  it("detects winner when only one faction has cities", async () => {
     const factions = [
       { id: "f1", name: "Alpha", modelProvider: "mock", color: "#f00" },
       { id: "f2", name: "Beta", modelProvider: "mock", color: "#0f0" },
@@ -36,13 +34,13 @@ describe("GameLoop", () => {
     ]);
     let state = createInitialState(5, 42, factions);
 
+    // Eliminate f2 by setting alive = false
     const newFactions = new Map(state.factions);
     newFactions.set("f2", { ...newFactions.get("f2")!, alive: false });
     state = { ...state, factions: newFactions };
 
     const onUpdate = vi.fn();
     const loop = new GameLoop(state, adapters, onUpdate);
-
     await loop.tick();
     expect(loop.getState().winner).toBe("f1");
   });

@@ -12,15 +12,12 @@ export function generateSummary(state: GameState): string {
   ];
 
   for (const faction of aliveFactions) {
-    const tileCount = [...state.tiles.values()].filter(
-      (t) => t.owner === faction.id
-    ).length;
-    const armyCount = [...state.tiles.values()]
-      .filter((t) => t.owner === faction.id)
-      .reduce((sum, t) => sum + t.army, 0);
+    const cities = [...state.cities.values()].filter(c => c.factionId === faction.id);
+    const units = [...state.units.values()].filter(u => u.factionId === faction.id);
+    const techCount = faction.techs.length;
 
     lines.push(
-      `${faction.name}: ${tileCount} tiles, ${armyCount} army, ${faction.gold} gold, ${faction.food} food`
+      `${faction.name}: ${cities.length} cities, ${units.length} units, ${faction.gold} gold, ${faction.food} food, ${techCount} techs`
     );
   }
 
