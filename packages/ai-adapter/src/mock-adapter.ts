@@ -228,20 +228,22 @@ function decideCityOrder(
     }
   }
 
-  // Train military units if gold allows and food balance is positive
-  const ownUnits = [...state.units.values()].filter(
-    (u) => u.factionId === factionId,
-  );
-  const unitFoodCost = (ownUnits.length + 1) * FOOD_PER_UNIT;
-  const hasFoodHeadroom = faction.food > unitFoodCost;
-
-  if (hasFoodHeadroom && gold >= UNIT_STATS.infantry.cost) {
+  // Train military units — always train if gold allows (food is managed by economy)
+  if (gold >= UNIT_STATS.infantry.cost) {
+    const ownUnits = [...state.units.values()].filter(
+      (u) => u.factionId === factionId,
+    );
     const infantryCount = ownUnits.filter((u) => u.type === "infantry").length;
     const cavalryCount = ownUnits.filter((u) => u.type === "cavalry").length;
+    const artilleryCount = ownUnits.filter((u) => u.type === "artillery").length;
 
-    const unitType = cavalryCount < infantryCount && gold >= UNIT_STATS.cavalry.cost
-      ? "cavalry"
-      : "infantry";
+    // Build a balanced army: 2 infantry : 1 cavalry : 1 artillery
+    let unitType: string = "infantry";
+    if (cavalryCount * 2 < infantryCount && gold >= UNIT_STATS.cavalry.cost) {
+      unitType = "cavalry";
+    } else if (artilleryCount * 2 < infantryCount && gold >= UNIT_STATS.artillery.cost) {
+      unitType = "artillery";
+    }
 
     return { cityId: city.id, action: "train", target: unitType };
   }

@@ -1,5 +1,5 @@
 import type { GameState, FactionId, AIAdapter, TurnDecision } from "@xpoch/shared";
-import { executeTurnDecision, processEconomy, checkVictory, advanceTick, addLogEntry } from "@xpoch/engine";
+import { executeTurnDecision, processEconomy, processCityProduction, checkVictory, checkEliminations, advanceTick, addLogEntry } from "@xpoch/engine";
 
 export class GameLoop {
   private state: GameState;
@@ -65,7 +65,9 @@ export class GameLoop {
       newState = executeTurnDecision(newState, decision);
     }
 
+    newState = processCityProduction(newState);
     newState = processEconomy(newState);
+    newState = checkEliminations(newState);
     newState = advanceTick(newState);
 
     this.state = newState;

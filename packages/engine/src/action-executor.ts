@@ -9,7 +9,7 @@ import type {
   Unit,
   DiplomaticStatus,
 } from "@xpoch/shared";
-import { hexKey, UNIT_STATS, RUSH_GOLD_MULTIPLIER, TERRAIN_DEFENSE_BONUS, CITY_DEFENSE_BONUS, CAPITAL_DEFENSE_BONUS, WALLS_DEFENSE_BONUS } from "@xpoch/shared";
+import { hexKey, UNIT_STATS, BUILDING_STATS, RUSH_GOLD_MULTIPLIER, TERRAIN_DEFENSE_BONUS, CITY_DEFENSE_BONUS, CAPITAL_DEFENSE_BONUS, WALLS_DEFENSE_BONUS } from "@xpoch/shared";
 import {
   updateFaction,
   addLogEntry,
@@ -232,15 +232,26 @@ function captureCity(
   const city = state.cities.get(cityId);
   if (!city) return state;
 
+  // Update city ownership
   const newCities = new Map(state.cities);
   newCities.set(cityId, {
     ...city,
     factionId: newOwner,
-    isCapital: false, // captured cities lose capital status
+    isCapital: false,
     currentProject: null,
   });
 
-  return { ...state, cities: newCities };
+  let s: GameState = { ...state, cities: newCities };
+
+  // Update all outskirt tiles to reflect new ownership
+  const newTiles = new Map(s.tiles);
+  for (const [key, tile] of newTiles) {
+    if (tile.isCityOutskirt === cityId || tile.cityId === cityId) {
+      newTiles.set(key, { ...tile, owner: newOwner });
+    }
+  }
+
+  return { ...s, tiles: newTiles };
 }
 
 function executeFortify(state: GameState, order: MilitaryOrder): GameState {
@@ -349,9 +360,9 @@ function executeBuild(
   const city = state.cities.get(order.cityId);
   if (!city || !order.target) return state;
 
-  // Start a production project
-  const buildingStats = (UNIT_STATS as Record<string, { cost: number }>)[order.target]
-    ?? { cost: 10 }; // fallback
+  // Start a production project using BUILDING_STATS
+  const bStats = BUILDING_STATS[order.target as keyof typeof BUILDING_STATS];
+  const cost = bStats?.cost ?? 10;
 
   const newCities = new Map(state.cities);
   newCities.set(order.cityId, {
@@ -360,7 +371,7 @@ function executeBuild(
       type: "building",
       target: order.target,
       invested: 0,
-      cost: buildingStats.cost,
+      cost,
     },
   });
 
