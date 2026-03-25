@@ -4,6 +4,8 @@ import {
   BUILDING_STATS,
   FOOD_PER_UNIT,
   MAX_STORED_FOOD,
+  BASE_FOOD_PER_CITY,
+  BASE_RESEARCH_PER_CITY,
 } from "@xpoch/shared";
 import {
   updateFaction,
@@ -92,7 +94,8 @@ export function calculateGoldIncome(state: GameState, factionId: FactionId): num
 /**
  * Calculate food balance (production - consumption) for a faction.
  * Food production comes from:
- *   - Plains tiles when faction has "agriculture" tech (+1 each)
+ *   - BASE_FOOD_PER_CITY per city (baseline subsistence)
+ *   - Plains tiles produce 1 base food; with "agriculture" tech they produce 2
  *   - Buildings with foodBonus (e.g. granary +2)
  * Consumption: each unit costs FOOD_PER_UNIT per tick.
  */
@@ -102,11 +105,12 @@ export function calculateFoodBalance(
 ): { readonly produced: number; readonly consumed: number; readonly balance: number } {
   const tiles = getOwnedTiles(state, factionId);
   const hasAgriculture = hasTech(state, factionId, "agriculture");
+  const factionCities = getFactionCities(state, factionId);
 
-  let produced = 0;
+  let produced = factionCities.length * BASE_FOOD_PER_CITY;
   for (const tile of tiles) {
-    if (hasAgriculture && tile.terrain === "plains") {
-      produced += 1;
+    if (tile.terrain === "plains") {
+      produced += hasAgriculture ? 2 : 1;
     }
     if (tile.building !== null) {
       produced += BUILDING_STATS[tile.building].foodBonus;
@@ -121,12 +125,13 @@ export function calculateFoodBalance(
 
 /**
  * Calculate research points generated this tick for a faction.
- * From buildings with researchBonus (e.g. library +2).
+ * BASE_RESEARCH_PER_CITY per city + buildings with researchBonus (e.g. library +2).
  */
 export function calculateResearch(state: GameState, factionId: FactionId): number {
   const tiles = getOwnedTiles(state, factionId);
+  const factionCities = getFactionCities(state, factionId);
 
-  let research = 0;
+  let research = factionCities.length * BASE_RESEARCH_PER_CITY;
   for (const tile of tiles) {
     if (tile.building !== null) {
       research += BUILDING_STATS[tile.building].researchBonus;
@@ -139,10 +144,10 @@ export function calculateResearch(state: GameState, factionId: FactionId): numbe
 /**
  * Process one tick of economy for all factions:
  * 1. Calculate gold income: sum of TERRAIN_GOLD for owned tiles + building gold bonuses
- * 2. Calculate food production: from plains (agriculture tech) + granary buildings
+ * 2. Calculate food production: base per city + plains (base 1, +1 with agriculture) + granary buildings
  * 3. Food consumption: each unit costs FOOD_PER_UNIT (1) food per tick
  * 4. Starvation: if food deficit, units lose 1 HP (strength) each
- * 5. Research income: from libraries + building research bonuses per city
+ * 5. Research income: base per city + libraries + building research bonuses
  * 6. Eliminate factions with 0 cities
  */
 export function processEconomy(state: GameState): GameState {

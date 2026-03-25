@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { GameState, Faction, FactionId, Tile, City, Unit, HexCoord } from "@xpoch/shared";
-import { hexKey, TERRAIN_GOLD, FOOD_PER_UNIT, BUILDING_STATS } from "@xpoch/shared";
+import { hexKey, TERRAIN_GOLD, FOOD_PER_UNIT, BUILDING_STATS, BASE_FOOD_PER_CITY, BASE_RESEARCH_PER_CITY } from "@xpoch/shared";
 import {
   processEconomy,
   calculateGoldIncome,
@@ -138,7 +138,7 @@ describe("calculateGoldIncome", () => {
 });
 
 describe("calculateFoodBalance", () => {
-  it("plains produce food when faction has agriculture tech", () => {
+  it("plains produce 2 food per tile when faction has agriculture tech", () => {
     const tiles = new Map<string, Tile>();
     const coord1: HexCoord = { q: 0, r: 0 };
     const coord2: HexCoord = { q: 1, r: 0 };
@@ -150,12 +150,13 @@ describe("calculateFoodBalance", () => {
 
     const state = makeState({ tiles, factions });
     const balance = calculateFoodBalance(state, "f1");
-    expect(balance.produced).toBe(2);
+    // 2 plains * 2 food each (with agriculture) = 4, no cities so no base food
+    expect(balance.produced).toBe(4);
     expect(balance.consumed).toBe(0);
-    expect(balance.balance).toBe(2);
+    expect(balance.balance).toBe(4);
   });
 
-  it("plains do NOT produce food without agriculture tech", () => {
+  it("plains produce 1 base food without agriculture tech", () => {
     const tiles = new Map<string, Tile>();
     const coord: HexCoord = { q: 0, r: 0 };
     tiles.set(hexKey(coord), makeTile({ coord, terrain: "plains", owner: "f1" }));
@@ -165,7 +166,24 @@ describe("calculateFoodBalance", () => {
 
     const state = makeState({ tiles, factions });
     const balance = calculateFoodBalance(state, "f1");
-    expect(balance.produced).toBe(0);
+    // 1 plains * 1 base food = 1
+    expect(balance.produced).toBe(1);
+  });
+
+  it("includes BASE_FOOD_PER_CITY from cities", () => {
+    const tiles = new Map<string, Tile>();
+    const cityCoord: HexCoord = { q: 0, r: 0 };
+    tiles.set(hexKey(cityCoord), makeTile({ coord: cityCoord, terrain: "desert", owner: "f1", cityId: "city1" }));
+
+    const factions = new Map<FactionId, Faction>();
+    factions.set("f1", makeFaction({ id: "f1", techs: [] }));
+
+    const cities = new Map<string, City>();
+    cities.set("city1", makeCity({ id: "city1", factionId: "f1", coord: cityCoord }));
+
+    const state = makeState({ tiles, factions, cities });
+    const balance = calculateFoodBalance(state, "f1");
+    expect(balance.produced).toBe(BASE_FOOD_PER_CITY);
   });
 
   it("granary buildings add food bonus", () => {
@@ -183,8 +201,8 @@ describe("calculateFoodBalance", () => {
 
     const state = makeState({ tiles, factions });
     const balance = calculateFoodBalance(state, "f1");
-    // 1 from agriculture plains + 2 from granary
-    expect(balance.produced).toBe(1 + BUILDING_STATS.granary.foodBonus);
+    // 2 from agriculture plains + 2 from granary
+    expect(balance.produced).toBe(2 + BUILDING_STATS.granary.foodBonus);
   });
 
   it("units consume food", () => {
@@ -255,15 +273,28 @@ describe("processEconomy", () => {
   it("starvation reduces unit strength", () => {
     const tiles = new Map<string, Tile>();
     const coord: HexCoord = { q: 0, r: 0 };
+    const coord2: HexCoord = { q: -1, r: 0 };
+    const coord3: HexCoord = { q: 0, r: -1 };
+    const coord4: HexCoord = { q: -1, r: 1 };
+    const coord5: HexCoord = { q: 1, r: -1 };
     const cityCoord: HexCoord = { q: 1, r: 0 };
     tiles.set(hexKey(coord), makeTile({ coord, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord2), makeTile({ coord: coord2, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord3), makeTile({ coord: coord3, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord4), makeTile({ coord: coord4, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord5), makeTile({ coord: coord5, terrain: "desert", owner: "f1" }));
     tiles.set(hexKey(cityCoord), makeTile({ coord: cityCoord, terrain: "desert", owner: "f1", cityId: "city1" }));
 
     const factions = new Map<FactionId, Faction>();
     factions.set("f1", makeFaction({ id: "f1", food: 0, storedFood: 0, techs: [] }));
 
+    // Need more units than BASE_FOOD_PER_CITY can feed to trigger starvation
     const units = new Map<string, Unit>();
     units.set("u1", makeUnit({ id: "u1", factionId: "f1", coord, strength: 3 }));
+    units.set("u2", makeUnit({ id: "u2", factionId: "f1", coord: coord2, strength: 3 }));
+    units.set("u3", makeUnit({ id: "u3", factionId: "f1", coord: coord3, strength: 3 }));
+    units.set("u4", makeUnit({ id: "u4", factionId: "f1", coord: coord4, strength: 3 }));
+    units.set("u5", makeUnit({ id: "u5", factionId: "f1", coord: coord5, strength: 3 }));
 
     const cities = new Map<string, City>();
     cities.set("city1", makeCity({ id: "city1", factionId: "f1", coord: cityCoord }));
@@ -271,28 +302,40 @@ describe("processEconomy", () => {
     const state = makeState({ tiles, factions, units, cities });
     const next = processEconomy(state);
 
-    const unit = next.units.get("u1");
-    // Unit should have lost 1 strength due to starvation
-    if (unit !== undefined) {
-      expect(unit.strength).toBe(2);
-    } else {
-      // Unit may have been removed if strength went to 0 (shouldn't happen with strength 3)
-      expect(unit).toBeDefined();
+    // available = 0 + 0 + BASE_FOOD_PER_CITY(3) - 5 units = -2
+    // 2 units should lose 1 strength
+    let starvedCount = 0;
+    for (const unit of next.units.values()) {
+      if (unit.strength < 3) starvedCount++;
     }
+    expect(starvedCount).toBe(2);
   });
 
   it("starvation removes units that reach 0 strength", () => {
     const tiles = new Map<string, Tile>();
     const coord: HexCoord = { q: 0, r: 0 };
+    const coord2: HexCoord = { q: -1, r: 0 };
+    const coord3: HexCoord = { q: 0, r: -1 };
+    const coord4: HexCoord = { q: -1, r: 1 };
+    const coord5: HexCoord = { q: 1, r: -1 };
     const cityCoord: HexCoord = { q: 1, r: 0 };
     tiles.set(hexKey(coord), makeTile({ coord, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord2), makeTile({ coord: coord2, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord3), makeTile({ coord: coord3, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord4), makeTile({ coord: coord4, terrain: "desert", owner: "f1" }));
+    tiles.set(hexKey(coord5), makeTile({ coord: coord5, terrain: "desert", owner: "f1" }));
     tiles.set(hexKey(cityCoord), makeTile({ coord: cityCoord, terrain: "desert", owner: "f1", cityId: "city1" }));
 
     const factions = new Map<FactionId, Faction>();
     factions.set("f1", makeFaction({ id: "f1", food: 0, storedFood: 0 }));
 
+    // 5 units with strength 1 each, BASE_FOOD_PER_CITY=3 food, deficit = 2
     const units = new Map<string, Unit>();
     units.set("u1", makeUnit({ id: "u1", factionId: "f1", coord, strength: 1 }));
+    units.set("u2", makeUnit({ id: "u2", factionId: "f1", coord: coord2, strength: 1 }));
+    units.set("u3", makeUnit({ id: "u3", factionId: "f1", coord: coord3, strength: 1 }));
+    units.set("u4", makeUnit({ id: "u4", factionId: "f1", coord: coord4, strength: 1 }));
+    units.set("u5", makeUnit({ id: "u5", factionId: "f1", coord: coord5, strength: 1 }));
 
     const cities = new Map<string, City>();
     cities.set("city1", makeCity({ id: "city1", factionId: "f1", coord: cityCoord }));
@@ -300,7 +343,8 @@ describe("processEconomy", () => {
     const state = makeState({ tiles, factions, units, cities });
     const next = processEconomy(state);
 
-    expect(next.units.has("u1")).toBe(false);
+    // 2 units should be removed (strength 1 - 1 = 0)
+    expect(next.units.size).toBe(3);
   });
 
   it("research accumulates from buildings", () => {
@@ -324,7 +368,7 @@ describe("processEconomy", () => {
     const state = makeState({ tiles, factions, cities });
     const next = processEconomy(state);
 
-    expect(next.factions.get("f1")!.research).toBe(5 + BUILDING_STATS.library.researchBonus);
+    expect(next.factions.get("f1")!.research).toBe(5 + BASE_RESEARCH_PER_CITY + BUILDING_STATS.library.researchBonus);
   });
 
   it("eliminates faction with 0 cities", () => {

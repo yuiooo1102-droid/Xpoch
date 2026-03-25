@@ -79,7 +79,10 @@ export const FOOD_PER_UNIT = 1;
 export const MAX_STORED_FOOD = 20;
 export const RUSH_GOLD_MULTIPLIER = 2; // pay 2x gold to rush production
 export const STARTING_GOLD = 20;
-export const STARTING_FOOD = 10;
+export const STARTING_FOOD = 30;
+export const BASE_FOOD_PER_CITY = 3;
+export const BASE_RESEARCH_PER_CITY = 1;
+export const STARTING_TECHS: readonly string[] = ["agriculture"];
 
 // === Building Stats ===
 
@@ -98,8 +101,8 @@ export interface BuildingStats {
 
 export const BUILDING_STATS: Record<BuildingType, BuildingStats> = {
   granary:     { cost: 4,  terrains: ["plains"], anyLand: false, effect: "+2 food", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 2, defenseBonus: 0, requiresTech: "pottery" },
-  barracks:    { cost: 6,  terrains: [], anyLand: true, effect: "Units +1 str", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "bronze_working" },
-  workshop:    { cost: 5,  terrains: ["mountain", "forest"], anyLand: false, effect: "+2 production", goldBonus: 0, productionBonus: 2, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: null },
+  barracks:    { cost: 6,  terrains: [], anyLand: true, effect: "Units +1 str", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: null },
+  workshop:    { cost: 5,  terrains: ["mountain", "forest"], anyLand: false, effect: "+2 production", goldBonus: 0, productionBonus: 2, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "mining" },
   market:      { cost: 5,  terrains: [], anyLand: true, effect: "+2 gold/turn", goldBonus: 2, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "currency" },
   library:     { cost: 6,  terrains: [], anyLand: true, effect: "+2 research/turn", goldBonus: 0, productionBonus: 0, researchBonus: 2, foodBonus: 0, defenseBonus: 0, requiresTech: null },
   city_walls:  { cost: 8,  terrains: [], anyLand: true, effect: "+4 city defense", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 4, requiresTech: "masonry" },

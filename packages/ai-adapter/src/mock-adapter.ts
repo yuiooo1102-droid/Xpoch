@@ -9,7 +9,7 @@ import type {
   City,
   HexCoord,
 } from "@xpoch/shared";
-import { hexKey, hexNeighbors, hexDistance, UNIT_STATS, TECH_TREE, BUILDING_STATS } from "@xpoch/shared";
+import { hexKey, hexNeighbors, hexDistance, UNIT_STATS, TECH_TREE, BUILDING_STATS, FOOD_PER_UNIT } from "@xpoch/shared";
 
 /**
  * Aggressive mock AI that trains units, builds improvements,
@@ -187,18 +187,19 @@ function decideCityOrder(
   city: City,
   gold: number,
 ): CityOrder {
+  const faction = state.factions.get(factionId)!;
+
   // If already building something, continue (or rush if affordable)
   if (city.currentProject) {
     return { cityId: city.id, action: "idle" };
   }
 
-  // Check if city has barracks in outskirts
+  // Try to build barracks if missing and we have the required tech (or no tech needed)
   const hasBarracks = [...state.tiles.values()].some(
     (t) => t.isCityOutskirt === city.id && t.building === "barracks",
   );
 
-  // Build barracks first if missing
-  if (!hasBarracks) {
+  if (!hasBarracks && canBuildBuilding(faction, "barracks")) {
     const buildHex = findBuildableHex(state, city.id, "barracks");
     if (buildHex) {
       return {
@@ -210,12 +211,31 @@ function decideCityOrder(
     }
   }
 
-  // Train military units if gold allows
-  if (gold >= UNIT_STATS.infantry.cost) {
-    // Alternate between infantry and cavalry
-    const ownUnits = [...state.units.values()].filter(
-      (u) => u.factionId === factionId,
-    );
+  // Try to build a library if missing (no tech required, gives research)
+  const hasLibrary = [...state.tiles.values()].some(
+    (t) => t.isCityOutskirt === city.id && t.building === "library",
+  );
+
+  if (!hasLibrary && canBuildBuilding(faction, "library")) {
+    const buildHex = findBuildableHex(state, city.id, "library");
+    if (buildHex) {
+      return {
+        cityId: city.id,
+        action: "build",
+        target: "library",
+        hex: buildHex,
+      };
+    }
+  }
+
+  // Train military units if gold allows and food balance is positive
+  const ownUnits = [...state.units.values()].filter(
+    (u) => u.factionId === factionId,
+  );
+  const unitFoodCost = (ownUnits.length + 1) * FOOD_PER_UNIT;
+  const hasFoodHeadroom = faction.food > unitFoodCost;
+
+  if (hasFoodHeadroom && gold >= UNIT_STATS.infantry.cost) {
     const infantryCount = ownUnits.filter((u) => u.type === "infantry").length;
     const cavalryCount = ownUnits.filter((u) => u.type === "cavalry").length;
 
@@ -227,6 +247,15 @@ function decideCityOrder(
   }
 
   return { cityId: city.id, action: "idle" };
+}
+
+function canBuildBuilding(
+  faction: { readonly techs: readonly string[] },
+  buildingType: keyof typeof BUILDING_STATS,
+): boolean {
+  const stats = BUILDING_STATS[buildingType];
+  if (stats.requiresTech === null) return true;
+  return faction.techs.includes(stats.requiresTech);
 }
 
 function findBuildableHex(
@@ -255,6 +284,8 @@ function findBuildableHex(
 
 // --- Research ---
 
+const PRIORITY_TECHS = ["bronze_working", "mining", "pottery", "animal_husbandry"];
+
 function pickResearch(researchedTechs: readonly string[]): string | null {
   const available = TECH_TREE.filter((t) => {
     if (researchedTechs.includes(t.id)) return false;
@@ -263,7 +294,11 @@ function pickResearch(researchedTechs: readonly string[]): string | null {
 
   if (available.length === 0) return null;
 
-  // Pick cheapest
+  // Prioritize military/economy techs first
+  const prioritized = available.find((t) => PRIORITY_TECHS.includes(t.id));
+  if (prioritized) return prioritized.id;
+
+  // Otherwise pick cheapest
   return available.reduce((a, b) => (a.cost <= b.cost ? a : b)).id;
 }
 

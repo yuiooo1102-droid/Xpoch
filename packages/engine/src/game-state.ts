@@ -18,6 +18,7 @@ import {
   UNIT_STATS,
   STARTING_GOLD,
   STARTING_FOOD,
+  STARTING_TECHS,
   WONDER_DEFS,
 } from "@xpoch/shared";
 import { generateMap } from "./map-generator";
@@ -111,7 +112,7 @@ export function createInitialState(
       food: STARTING_FOOD,
       storedFood: 0,
       research: 0,
-      techs: [],
+      techs: [...STARTING_TECHS],
       alive: true,
       controlledResources: [],
     });

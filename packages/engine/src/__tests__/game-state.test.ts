@@ -17,7 +17,7 @@ import {
   advanceTick,
 } from "../game-state";
 import type { FactionConfig } from "../game-state";
-import { STARTING_GOLD, STARTING_FOOD, UNIT_STATS } from "@xpoch/shared";
+import { STARTING_GOLD, STARTING_FOOD, STARTING_TECHS, UNIT_STATS } from "@xpoch/shared";
 
 const TWO_FACTIONS: readonly FactionConfig[] = [
   { id: "f1", name: "Alpha", modelProvider: "mock", color: "#ff0000" },
@@ -46,7 +46,7 @@ describe("createInitialState", () => {
       expect(faction.alive).toBe(true);
       expect(faction.gold).toBe(STARTING_GOLD);
       expect(faction.food).toBe(STARTING_FOOD);
-      expect(faction.techs).toEqual([]);
+      expect(faction.techs).toEqual([...STARTING_TECHS]);
       expect(faction.research).toBe(0);
     }
   });
