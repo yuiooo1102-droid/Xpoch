@@ -23,6 +23,51 @@ describe("generateMap", () => {
     }
   });
 
+  it("every tile has building: null, cityId: null, isCityOutskirt: null", () => {
+    const tiles = generateMap(MAP_SIZE, 42);
+    for (const tile of tiles.values()) {
+      expect(tile.building).toBeNull();
+      expect(tile.cityId).toBeNull();
+      expect(tile.isCityOutskirt).toBeNull();
+    }
+  });
+
+  it("natural resources are only on valid terrains", () => {
+    const tiles = generateMap(MAP_SIZE, 42);
+    const validResourceTerrains: Record<string, string[]> = {
+      iron: ["mountain", "forest"],
+      horses: ["plains"],
+      saltpeter: ["desert", "plains"],
+      oil: ["desert", "mountain"],
+    };
+    for (const tile of tiles.values()) {
+      if (tile.naturalResource !== null) {
+        const allowed = validResourceTerrains[tile.naturalResource];
+        expect(allowed).toBeDefined();
+        expect(allowed).toContain(tile.terrain);
+      }
+    }
+  });
+
+  it("some land tiles have natural resources (~15%)", () => {
+    const tiles = generateMap(MAP_SIZE, 42);
+    const landTiles = [...tiles.values()].filter((t) => t.terrain !== "water");
+    const resourceTiles = landTiles.filter((t) => t.naturalResource !== null);
+    // Expect roughly 5-25% (with some tolerance for randomness)
+    const ratio = resourceTiles.length / landTiles.length;
+    expect(ratio).toBeGreaterThan(0.03);
+    expect(ratio).toBeLessThan(0.35);
+  });
+
+  it("water tiles never have natural resources", () => {
+    const tiles = generateMap(MAP_SIZE, 42);
+    for (const tile of tiles.values()) {
+      if (tile.terrain === "water") {
+        expect(tile.naturalResource).toBeNull();
+      }
+    }
+  });
+
   it("is deterministic with same seed", () => {
     const a = generateMap(MAP_SIZE, 123);
     const b = generateMap(MAP_SIZE, 123);

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { AIAdapter, Action, GameState, FactionId } from "@xpoch/shared";
+import type { AIAdapter, TurnDecision, GameState, FactionId } from "@xpoch/shared";
 import { buildPrompt } from "./prompt-builder";
 import { parseAIResponse } from "./response-parser";
 
@@ -15,13 +15,13 @@ export class ClaudeAdapter implements AIAdapter {
 
   async decideActions(
     state: GameState,
-    factionId: FactionId
-  ): Promise<Action[]> {
+    factionId: FactionId,
+  ): Promise<TurnDecision> {
     const prompt = buildPrompt(state, factionId);
 
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: 512,
+      max_tokens: 1024,
       messages: [{ role: "user", content: prompt }],
     });
 

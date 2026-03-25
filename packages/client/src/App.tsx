@@ -4,11 +4,14 @@ import { HexMap } from "./components/HexMap";
 import { BattleLog } from "./components/BattleLog";
 import { FactionPanel } from "./components/FactionPanel";
 import { GameControls } from "./components/GameControls";
+import { SetupPanel } from "./components/SetupPanel";
+import type { PlayerSetup } from "./components/SetupPanel";
 import { useGameSocket } from "./hooks/use-game-socket";
 import { useGameState } from "./hooks/use-game-state";
 
 export function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [showSetup, setShowSetup] = useState(true);
   const { state, updateFromServer } = useGameState();
 
   const handleMessage = useCallback(
@@ -22,26 +25,33 @@ export function App() {
 
   useGameSocket(sessionId, handleMessage);
 
-  const createSession = async () => {
+  const startGame = async (players: PlayerSetup[], tickIntervalMs: number) => {
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        factions: [
-          { id: "claude", name: "Claude Empire", modelProvider: "mock", color: "#8B5CF6" },
-          { id: "gpt", name: "GPT Republic", modelProvider: "mock", color: "#10B981" },
-          { id: "gemini", name: "Gemini Dynasty", modelProvider: "mock", color: "#3B82F6" },
-        ],
-        tickIntervalMs: 3000,
+        players: players.map((p) => ({
+          name: p.name,
+          modelProvider: p.modelProvider,
+          apiKey: p.apiKey || undefined,
+          model: p.model || undefined,
+          color: p.color,
+        })),
+        tickIntervalMs,
       }),
     });
     const data = await res.json();
     setSessionId(data.sessionId);
+    setShowSetup(false);
 
     const stateRes = await fetch(`/api/sessions/${data.sessionId}`);
     const stateData = await stateRes.json();
     updateFromServer(stateData.state);
   };
+
+  if (showSetup) {
+    return <SetupPanel onStart={startGame} />;
+  }
 
   const winnerFaction = state.winner
     ? state.factions.get(state.winner)
@@ -54,7 +64,7 @@ export function App() {
         sessionId={sessionId}
         winner={state.winner}
         factionName={winnerFaction?.name}
-        onCreateSession={createSession}
+        onCreateSession={() => setShowSetup(true)}
       />
 
       <div className="flex-1 flex overflow-hidden">

@@ -30,14 +30,12 @@ export function GameControls({
             {factionName} WINS!
           </span>
         )}
-        {!sessionId && (
-          <button
-            onClick={onCreateSession}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded transition"
-          >
-            New Game
-          </button>
-        )}
+        <button
+          onClick={onCreateSession}
+          className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium rounded transition"
+        >
+          New Game
+        </button>
       </div>
     </div>
   );

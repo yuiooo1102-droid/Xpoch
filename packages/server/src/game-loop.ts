@@ -1,5 +1,5 @@
-import type { GameState, FactionId, AIAdapter } from "@xpoch/shared";
-import { executeAction, processEconomy, checkVictory, advanceTick, addLogEntry } from "@xpoch/engine";
+import type { GameState, FactionId, AIAdapter, TurnDecision } from "@xpoch/shared";
+import { executeTurnDecision, processEconomy, checkVictory, advanceTick, addLogEntry } from "@xpoch/engine";
 
 export class GameLoop {
   private state: GameState;
@@ -11,7 +11,7 @@ export class GameLoop {
   constructor(
     initialState: GameState,
     adapters: ReadonlyMap<FactionId, AIAdapter>,
-    onUpdate: (state: GameState) => void
+    onUpdate: (state: GameState) => void,
   ) {
     this.state = initialState;
     this.adapters = adapters;
@@ -32,7 +32,12 @@ export class GameLoop {
     const winner = checkVictory(this.state);
     if (winner) {
       this.state = { ...this.state, winner };
-      this.state = addLogEntry(this.state, `${this.state.factions.get(winner)?.name} has WON the game!`, [winner]);
+      this.state = addLogEntry(
+        this.state,
+        `${this.state.factions.get(winner)?.name} has WON the game!`,
+        "system",
+        [winner],
+      );
       this.onUpdate(this.state);
       this.stop();
       return;
@@ -40,24 +45,24 @@ export class GameLoop {
 
     const aliveFactions = [...this.state.factions.values()].filter((f) => f.alive);
 
-    const actionPromises = aliveFactions.map(async (faction) => {
+    const decisionPromises = aliveFactions.map(async (faction) => {
       const adapter = this.adapters.get(faction.id);
-      if (!adapter) return [];
+      if (!adapter) {
+        return emptyDecision(faction.id);
+      }
       try {
         return await adapter.decideActions(this.state, faction.id);
       } catch (err) {
         console.error(`AI error for ${faction.name}:`, err);
-        return [{ factionId: faction.id, type: "pass" as const }];
+        return emptyDecision(faction.id);
       }
     });
 
-    const allActions = await Promise.all(actionPromises);
+    const allDecisions = await Promise.all(decisionPromises);
 
     let newState = this.state;
-    for (const factionActions of allActions) {
-      for (const action of factionActions) {
-        newState = executeAction(newState, action);
-      }
+    for (const decision of allDecisions) {
+      newState = executeTurnDecision(newState, decision);
     }
 
     newState = processEconomy(newState);
@@ -82,4 +87,14 @@ export class GameLoop {
       this.intervalId = null;
     }
   }
+}
+
+function emptyDecision(factionId: FactionId): TurnDecision {
+  return {
+    factionId,
+    military: [],
+    cities: [],
+    research: null,
+    diplomacy: [],
+  };
 }

@@ -1,5 +1,5 @@
-import type { Tile, TerrainType } from "@xpoch/shared";
-import { hexDisk, hexKey, TERRAIN_RESOURCES } from "@xpoch/shared";
+import type { Tile, TerrainType, NaturalResource } from "@xpoch/shared";
+import { hexDisk, hexKey } from "@xpoch/shared";
 
 function createRng(seed: number): () => number {
   let s = seed | 0;
@@ -29,9 +29,31 @@ function pickTerrain(rng: () => number): TerrainType {
   return "plains";
 }
 
+/** Which natural resources can appear on each terrain type */
+const RESOURCE_BY_TERRAIN: Record<TerrainType, readonly NaturalResource[]> = {
+  plains: ["horses", "saltpeter"],
+  forest: ["iron"],
+  mountain: ["iron", "oil"],
+  water: [],
+  desert: ["saltpeter", "oil"],
+};
+
+/** Probability that an eligible land tile receives a natural resource (~15%) */
+const RESOURCE_CHANCE = 0.15;
+
+function pickNaturalResource(
+  terrain: TerrainType,
+  rng: () => number,
+): NaturalResource {
+  const candidates = RESOURCE_BY_TERRAIN[terrain];
+  if (candidates.length === 0) return null;
+  if (rng() > RESOURCE_CHANCE) return null;
+  return candidates[Math.floor(rng() * candidates.length)] ?? null;
+}
+
 export function generateMap(
   radius: number,
-  seed: number
+  seed: number,
 ): ReadonlyMap<string, Tile> {
   const rng = createRng(seed);
   const coords = hexDisk({ q: 0, r: 0 }, radius);
@@ -39,12 +61,16 @@ export function generateMap(
 
   for (const coord of coords) {
     const terrain = pickTerrain(rng);
+    const naturalResource = pickNaturalResource(terrain, rng);
+
     tiles.set(hexKey(coord), {
       coord,
       terrain,
       owner: null,
-      army: 0,
-      resources: TERRAIN_RESOURCES[terrain] ?? 0,
+      naturalResource,
+      building: null,
+      cityId: null,
+      isCityOutskirt: null,
     });
   }
 

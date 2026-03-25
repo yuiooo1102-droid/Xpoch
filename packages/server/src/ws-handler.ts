@@ -7,7 +7,7 @@ export class WsHandler {
   private subscriptions = new Map<string, Set<WebSocket>>();
 
   constructor(server: Server) {
-    this.wss = new WebSocketServer({ server });
+    this.wss = new WebSocketServer({ server, path: "/ws" });
 
     this.wss.on("connection", (ws) => {
       ws.on("message", (data) => {

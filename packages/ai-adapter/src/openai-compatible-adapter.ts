@@ -3,13 +3,14 @@ import type { AIAdapter, TurnDecision, GameState, FactionId } from "@xpoch/share
 import { buildPrompt } from "./prompt-builder";
 import { parseAIResponse } from "./response-parser";
 
-export class OpenAIAdapter implements AIAdapter {
-  readonly providerId = "openai";
+export class OpenAICompatibleAdapter implements AIAdapter {
+  readonly providerId: string;
   private client: OpenAI;
   private model: string;
 
-  constructor(apiKey: string, model: string = "gpt-4o-mini") {
-    this.client = new OpenAI({ apiKey });
+  constructor(providerId: string, apiKey: string, baseURL: string, model: string) {
+    this.providerId = providerId;
+    this.client = new OpenAI({ apiKey, baseURL });
     this.model = model;
   }
 
