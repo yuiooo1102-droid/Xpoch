@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { AIAdapter, TurnDecision, GameState, FactionId } from "@xpoch/shared";
 import { buildPrompt } from "./prompt-builder";
 import { parseAIResponse } from "./response-parser";
+import { buildIdMap, remapIds } from "./id-mapper";
 
 export class OpenAICompatibleAdapter implements AIAdapter {
   readonly providerId: string;
@@ -19,6 +20,7 @@ export class OpenAICompatibleAdapter implements AIAdapter {
     factionId: FactionId,
   ): Promise<TurnDecision> {
     const prompt = buildPrompt(state, factionId);
+    const idMap = buildIdMap(state, factionId);
 
     const response = await this.client.chat.completions.create({
       model: this.model,
@@ -27,6 +29,7 @@ export class OpenAICompatibleAdapter implements AIAdapter {
     });
 
     const text = response.choices[0]?.message?.content ?? "";
-    return parseAIResponse(text, factionId);
+    const decision = parseAIResponse(text, factionId);
+    return remapIds(decision, idMap);
   }
 }

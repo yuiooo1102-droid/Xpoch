@@ -8,29 +8,28 @@ describe("buildPrompt", () => {
     { id: "f2", name: "Beta", modelProvider: "mock", color: "#0f0" },
   ]);
 
-  it("includes faction name in prompt", () => {
+  it("includes faction name", () => {
     const prompt = buildPrompt(state, "f1");
     expect(prompt).toContain("Alpha");
   });
 
-  it("includes available action types", () => {
+  it("includes action types", () => {
     const prompt = buildPrompt(state, "f1");
     expect(prompt).toContain("move");
     expect(prompt).toContain("attack");
-    expect(prompt).toContain("fortify");
     expect(prompt).toContain("train");
     expect(prompt).toContain("build");
   });
 
-  it("includes gold and food resource info", () => {
+  it("includes gold and food in compact format", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("Gold:");
-    expect(prompt).toContain("Food:");
+    expect(prompt).toContain("G:");
+    expect(prompt).toContain("F:");
   });
 
-  it("includes research info", () => {
+  it("includes research info in compact format", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("Research:");
+    expect(prompt).toContain("R:");
   });
 
   it("includes JSON format instruction", () => {
@@ -40,20 +39,21 @@ describe("buildPrompt", () => {
 
   it("includes city info", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("Your Cities");
+    expect(prompt).toContain("CITIES");
     expect(prompt).toContain("Alpha Capital");
   });
 
-  it("includes unit info", () => {
+  it("includes unit info with short IDs", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("Your Units");
+    expect(prompt).toContain("UNITS");
     expect(prompt).toContain("infantry");
     expect(prompt).toContain("scout");
+    expect(prompt).toContain("u0");
   });
 
   it("includes tech info", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("Your Technologies");
-    expect(prompt).toContain("Available to research");
+    expect(prompt).toContain("TECH");
+    expect(prompt).toContain("avail:");
   });
 });

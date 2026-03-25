@@ -4,245 +4,181 @@ import type {
   City,
   Unit,
   Tile,
-  HexCoord,
 } from "@xpoch/shared";
-import { hexKey, hexDistance, hexDisk, TECH_TREE, BUILDING_STATS } from "@xpoch/shared";
+import { hexKey, hexDistance, hexDisk, TECH_TREE, UNIT_STATS } from "@xpoch/shared";
 
+/**
+ * Build a compact prompt for AI decision-making.
+ * Optimized for minimal token usage while preserving strategic info.
+ */
 export function buildPrompt(state: GameState, factionId: FactionId): string {
-  const faction = state.factions.get(factionId)!;
+  const f = state.factions.get(factionId)!;
+  const cities = getFactionCities(state, factionId);
+  const units = getFactionUnits(state, factionId);
+  const unitIndex = buildShortIds(units);
 
-  const factionCities = getCitiesForFaction(state, factionId);
-  const factionUnits = getUnitsForFaction(state, factionId);
-
-  const foodBalance = computeFoodBalance(state, factionId);
-  const researchInfo = computeResearchInfo(faction);
-
-  const sections = [
-    buildHeader(faction.name),
-    buildStatus(faction, factionCities, factionUnits, foodBalance, researchInfo),
-    buildCitiesSection(state, factionCities),
-    buildUnitsSection(factionUnits),
-    buildTechSection(faction),
-    buildVisibleMapSection(state, factionId, factionCities, factionUnits),
-    buildDiplomacySection(state, factionId),
-    buildActionsSection(),
-    buildResponseFormat(),
-  ];
-
-  return sections.join("\n\n");
+  return [
+    `You are "${f.name}" in a hex war game. Destroy all enemies.`,
+    `T${state.tick} G:${f.gold} F:${f.food} R:${f.research} Techs:${f.techs.length}`,
+    "",
+    compactCities(state, cities),
+    compactUnits(units, unitIndex),
+    compactTech(f.techs),
+    compactThreats(state, factionId, cities, units),
+    compactDiplomacy(state, factionId),
+    "",
+    FORMAT_BLOCK,
+  ].join("\n");
 }
 
-// --- Section builders ---
+// === Compact sections ===
 
-function buildHeader(factionName: string): string {
-  return `You are "${factionName}", commanding a civilization in a hex-based war game.
-Your objective: DESTROY all enemy factions by capturing their cities.`;
-}
-
-function buildStatus(
-  faction: ReturnType<ReadonlyMap<string, any>["get"]>,
-  cities: readonly City[],
-  units: readonly Unit[],
-  foodBalance: number,
-  researchInfo: { current: number; nextCost: number | null; nextName: string | null },
-): string {
-  const researchStr = researchInfo.nextCost !== null
-    ? `${faction.research}/${researchInfo.nextCost} for ${researchInfo.nextName}`
-    : `${faction.research} (no research queued)`;
-
-  const balanceSign = foodBalance >= 0 ? "+" : "";
-
-  return `## Your Status
-- Gold: ${faction.gold} | Food: ${faction.food} (balance: ${balanceSign}${foodBalance}/turn) | Research: ${researchStr}
-- Cities: ${cities.length} | Units: ${units.length} | Techs researched: ${faction.techs.length}`;
-}
-
-function buildCitiesSection(state: GameState, cities: readonly City[]): string {
-  if (cities.length === 0) return "## Your Cities\n(none)";
-
-  const lines = cities.map((city) => {
-    const project = city.currentProject
-      ? `building ${city.currentProject.target} (${city.currentProject.invested}/${city.currentProject.cost})`
-      : "idle";
-
-    const outskirtBuildings = getOutskirtBuildings(state, city.id);
-    const buildingsStr = outskirtBuildings.length > 0
-      ? outskirtBuildings.join(", ")
-      : "none";
-
-    return `- ${city.name} [${hexKey(city.coord)}] | production: ${city.production} | project: ${project} | buildings: ${buildingsStr}${city.isCapital ? " (CAPITAL)" : ""}`;
+function compactCities(state: GameState, cities: readonly City[]): string {
+  const lines = cities.map((c) => {
+    const blds = getOutskirtBuildings(state, c.id);
+    const proj = c.currentProject
+      ? `${c.currentProject.target}(${c.currentProject.invested}/${c.currentProject.cost})`
+      : "-";
+    const cap = c.isCapital ? "*" : "";
+    return `  ${cap}${c.name}[${hexKey(c.coord)}] prod:${c.production} proj:${proj} bld:[${blds.join(",")}]`;
   });
-
-  return `## Your Cities\n${lines.join("\n")}`;
+  return `CITIES(${cities.length}):\n${lines.join("\n")}`;
 }
 
-function buildUnitsSection(units: readonly Unit[]): string {
-  if (units.length === 0) return "## Your Units\n(none)";
+function compactUnits(units: readonly Unit[], idx: ReadonlyMap<string, string>): string {
+  // Group by type and summarize
+  const byType = new Map<string, { count: number; totalStr: number; positions: string[] }>();
+  for (const u of units) {
+    const entry = byType.get(u.type) ?? { count: 0, totalStr: 0, positions: [] };
+    entry.count++;
+    entry.totalStr += u.strength;
+    entry.positions.push(`${idx.get(u.id)}@${hexKey(u.coord)}`);
+    byType.set(u.type, entry);
+  }
 
-  const lines = units.map((u) =>
-    `- ${u.id}: ${u.type} | str: ${u.strength}/${u.maxStrength} | pos: ${hexKey(u.coord)} | moves: ${u.movement}/${u.maxMovement}`,
-  );
+  const summary = [...byType.entries()]
+    .map(([t, d]) => `${t}:${d.count}(str${d.totalStr})`)
+    .join(" ");
 
-  return `## Your Units\n${lines.join("\n")}`;
+  // Only list units individually if <= 15, otherwise just summary
+  if (units.length <= 15) {
+    const lines = units.map((u) =>
+      `  ${idx.get(u.id)} ${u.type} s${u.strength} @${hexKey(u.coord)} m${u.movement}`
+    );
+    return `UNITS(${units.length}) ${summary}:\n${lines.join("\n")}`;
+  }
+
+  return `UNITS(${units.length}) ${summary}`;
 }
 
-function buildTechSection(faction: { readonly techs: readonly string[]; readonly research: number }): string {
-  const researched = faction.techs.length > 0
-    ? faction.techs.join(", ")
-    : "(none)";
-
+function compactTech(techs: readonly string[]): string {
   const available = TECH_TREE.filter((t) => {
-    if (faction.techs.includes(t.id)) return false;
-    return t.prerequisites.every((p) => faction.techs.includes(p));
+    if (techs.includes(t.id)) return false;
+    return t.prerequisites.every((p) => techs.includes(p));
   });
 
-  const availableStr = available.length > 0
-    ? available.map((t) => `- ${t.id}: ${t.name} (cost: ${t.cost}) — ${t.effects.join("; ")}`).join("\n")
-    : "(none available)";
+  const avail = available
+    .sort((a, b) => a.cost - b.cost)
+    .slice(0, 5)
+    .map((t) => `${t.id}(${t.cost})`)
+    .join(" ");
 
-  return `## Your Technologies
-Researched: ${researched}
-
-Available to research:
-${availableStr}`;
+  return `TECH known:[${techs.join(",")}] avail:[${avail}]`;
 }
 
-function buildVisibleMapSection(
+function compactThreats(
   state: GameState,
   factionId: FactionId,
   cities: readonly City[],
   units: readonly Unit[],
 ): string {
-  const visibleCoords = computeVisibleHexes(state, factionId, cities, units);
-  const lines: string[] = [];
+  // Only report enemy units and cities within vision — and only the interesting ones
+  const visible = computeVisibleHexes(cities, units);
+  const enemies: string[] = [];
+  const enemyCities: string[] = [];
 
-  for (const key of visibleCoords) {
-    const tile = state.tiles.get(key);
-    if (!tile) continue;
-
-    const parts: string[] = [`${key}: ${tile.terrain}`];
-
-    if (tile.naturalResource) {
-      parts.push(`resource=${tile.naturalResource}`);
+  // Collect enemy units in vision
+  const seenEnemies = new Map<string, { type: string; count: number; totalStr: number; coord: string }>();
+  for (const u of state.units.values()) {
+    if (u.factionId === factionId) continue;
+    const key = hexKey(u.coord);
+    if (!visible.has(key)) continue;
+    const existing = seenEnemies.get(key);
+    if (existing) {
+      existing.count++;
+      existing.totalStr += u.strength;
+    } else {
+      seenEnemies.set(key, { type: u.type, count: 1, totalStr: u.strength, coord: key });
     }
-    if (tile.building) {
-      parts.push(`building=${tile.building}`);
-    }
-
-    // Show enemy units at this coord
-    const enemyUnits = [...state.units.values()].filter(
-      (u) => u.factionId !== factionId && hexKey(u.coord) === key,
-    );
-    if (enemyUnits.length > 0) {
-      const unitDescs = enemyUnits.map((u) => `${u.type}(str:${u.strength})`);
-      parts.push(`enemy_units=[${unitDescs.join(", ")}]`);
-    }
-
-    // Show enemy cities at this coord
-    if (tile.cityId) {
-      const city = state.cities.get(tile.cityId);
-      if (city && city.factionId !== factionId) {
-        parts.push(`enemy_city=${city.name}(${city.factionId})`);
-      }
-    }
-
-    if (tile.owner && tile.owner !== factionId) {
-      parts.push(`owner=${tile.owner}`);
-    }
-
-    lines.push(`  ${parts.join(" | ")}`);
   }
 
-  return `## Visible Map\n${lines.length > 0 ? lines.join("\n") : "  (no visible tiles)"}`;
+  for (const [, e] of seenEnemies) {
+    enemies.push(`${e.count}x@${e.coord}(str${e.totalStr})`);
+  }
+
+  // Collect enemy cities in vision
+  for (const city of state.cities.values()) {
+    if (city.factionId === factionId) continue;
+    if (!visible.has(hexKey(city.coord))) continue;
+    const owner = state.factions.get(city.factionId);
+    enemyCities.push(`${city.name}[${hexKey(city.coord)}]${city.isCapital ? "*" : ""}(${owner?.name ?? city.factionId})`);
+  }
+
+  // Faction summary (high level threat assessment)
+  const factionSummary = [...state.factions.values()]
+    .filter((f) => f.id !== factionId && f.alive)
+    .map((f) => {
+      const fc = [...state.cities.values()].filter((c) => c.factionId === f.id).length;
+      const fu = [...state.units.values()].filter((u) => u.factionId === f.id).length;
+      return `${f.name}:${fc}c/${fu}u`;
+    })
+    .join(" ");
+
+  const parts = [`ENEMIES: ${factionSummary}`];
+  if (enemyCities.length > 0) parts.push(`  visible_cities: ${enemyCities.join(" ")}`);
+  if (enemies.length > 0) parts.push(`  visible_units: ${enemies.join(" ")}`);
+  return parts.join("\n");
 }
 
-function buildDiplomacySection(state: GameState, factionId: FactionId): string {
-  const lines: string[] = [];
-
+function compactDiplomacy(state: GameState, factionId: FactionId): string {
+  const rels: string[] = [];
   for (const [key, status] of state.diplomacy.relations) {
     const [a, b] = key.split(":");
     if (a === factionId || b === factionId) {
       const otherId = a === factionId ? b : a;
-      const otherFaction = state.factions.get(otherId);
-      lines.push(`  ${otherFaction?.name ?? otherId}: ${status}`);
+      const other = state.factions.get(otherId);
+      rels.push(`${other?.name ?? otherId}:${status}`);
     }
   }
-
-  return `## Diplomacy\n${lines.length > 0 ? lines.join("\n") : "  (no diplomatic relations)"}`;
+  return rels.length > 0 ? `DIPLO: ${rels.join(" ")}` : "DIPLO: none";
 }
 
-function buildActionsSection(): string {
-  return `## Available Actions
+// Static format block — never changes
+const FORMAT_BLOCK = `ACT format JSON:
+{"military":[{"unit_id":"ID","action":"move|attack|fortify","to":"q,r"}],
+"cities":[{"city_id":"ID","action":"train|build|idle","target":"type","hex":"q,r"}],
+"research":"tech_id_or_null",
+"diplomacy":[{"action":"declare_war|propose_alliance|offer_peace","target":"faction_id"}]}
+train costs: inf=${UNIT_STATS.infantry.cost}g cav=${UNIT_STATS.cavalry.cost}g art=${UNIT_STATS.artillery.cost}g set=${UNIT_STATS.settler.cost}g sct=${UNIT_STATS.scout.cost}g
+Trump: inf>cav>art>inf. Attacker moves into enemy hex.`;
 
-### Military Orders (for each unit):
-- move: {"unit_id": "...", "action": "move", "to": "q,r"}
-- attack: {"unit_id": "...", "action": "attack", "to": "q,r"}
-- fortify: {"unit_id": "...", "action": "fortify"}
-- disband: {"unit_id": "...", "action": "disband"}
+// === Helpers ===
 
-### City Orders (for each city):
-- train: {"city_id": "...", "action": "train", "unit_type": "infantry|cavalry|artillery|settler|scout"}
-- build: {"city_id": "...", "action": "build", "building": "...", "hex": "q,r"}
-- rush: {"city_id": "...", "action": "rush"} (spend gold to finish current project)
-- idle: {"city_id": "...", "action": "idle"}
-
-### Research:
-- "tech_id" or null
-
-### Diplomacy:
-- {"action": "declare_war|propose_alliance|break_alliance|offer_peace|demand_tribute|send_gold", "target": "faction_id"}`;
-}
-
-function buildResponseFormat(): string {
-  return `Respond with JSON only:
-{
-  "military": [...],
-  "cities": [...],
-  "research": "tech_id_or_null",
-  "diplomacy": [...]
-}`;
-}
-
-// --- Helpers ---
-
-function getCitiesForFaction(state: GameState, factionId: FactionId): City[] {
+function getFactionCities(state: GameState, factionId: FactionId): City[] {
   return [...state.cities.values()].filter((c) => c.factionId === factionId);
 }
 
-function getUnitsForFaction(state: GameState, factionId: FactionId): Unit[] {
+function getFactionUnits(state: GameState, factionId: FactionId): Unit[] {
   return [...state.units.values()].filter((u) => u.factionId === factionId);
 }
 
-function computeFoodBalance(state: GameState, factionId: FactionId): number {
-  const unitCount = [...state.units.values()].filter(
-    (u) => u.factionId === factionId,
-  ).length;
-
-  // Each city tile with granary adds food; base food from cities
-  const cityCount = [...state.cities.values()].filter(
-    (c) => c.factionId === factionId,
-  ).length;
-
-  // Simplified: each city produces 2 food base, minus 1 per unit
-  return cityCount * 2 - unitCount;
-}
-
-function computeResearchInfo(faction: {
-  readonly techs: readonly string[];
-  readonly research: number;
-}): { current: number; nextCost: number | null; nextName: string | null } {
-  const available = TECH_TREE.filter((t) => {
-    if (faction.techs.includes(t.id)) return false;
-    return t.prerequisites.every((p) => faction.techs.includes(p));
-  });
-
-  if (available.length === 0) {
-    return { current: faction.research, nextCost: null, nextName: null };
+function buildShortIds(units: readonly Unit[]): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  let i = 0;
+  for (const u of units) {
+    map.set(u.id, `u${i++}`);
   }
-
-  // Show cheapest available as reference
-  const cheapest = available.reduce((a, b) => (a.cost < b.cost ? a : b));
-  return { current: faction.research, nextCost: cheapest.cost, nextName: cheapest.name };
+  return map;
 }
 
 function getOutskirtBuildings(state: GameState, cityId: string): string[] {
@@ -256,28 +192,20 @@ function getOutskirtBuildings(state: GameState, cityId: string): string[] {
 }
 
 function computeVisibleHexes(
-  state: GameState,
-  factionId: FactionId,
   cities: readonly City[],
   units: readonly Unit[],
 ): Set<string> {
   const visible = new Set<string>();
-  const visionRange = 2;
-
-  // Cities give vision
   for (const city of cities) {
-    for (const coord of hexDisk(city.coord, visionRange)) {
+    for (const coord of hexDisk(city.coord, 2)) {
       visible.add(hexKey(coord));
     }
   }
-
-  // Units give vision
   for (const unit of units) {
-    const range = unit.type === "scout" ? visionRange + 1 : visionRange;
+    const range = unit.type === "scout" ? 3 : 2;
     for (const coord of hexDisk(unit.coord, range)) {
       visible.add(hexKey(coord));
     }
   }
-
   return visible;
 }

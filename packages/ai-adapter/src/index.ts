@@ -6,5 +6,6 @@ export { OpenAICompatibleAdapter } from "./openai-compatible-adapter";
 export { GeminiAdapter } from "./gemini-adapter";
 export { createAdapter } from "./adapter-factory";
 export { PROVIDERS, getProvider } from "./providers";
+export { buildIdMap, remapIds } from "./id-mapper";
 export type { PlayerConfig } from "./adapter-factory";
 export type { ProviderDef } from "./providers";
