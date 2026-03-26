@@ -194,15 +194,15 @@ describe("processMarches", () => {
     });
     const army2 = makeArmy({
       id: "army-2",
-      generalId: "zhuge",
+      generalId: "zhugeliang",
       coord: { q: 0, r: 0 },
       target: { q: 6, r: 0 },
       state: "marching",
     });
     const general1 = makeGeneral({ id: "lubu", defId: "lubu" }); // speed 3
     const general2 = makeGeneral({
-      id: "zhuge",
-      defId: "zhuge",
+      id: "zhugeliang",
+      defId: "zhugeliang",
       name: "诸葛亮",
     }); // speed 2
 

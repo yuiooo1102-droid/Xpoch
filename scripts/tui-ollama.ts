@@ -23,13 +23,13 @@ import {
   addLogEntry,
 } from "@xpoch/engine";
 import { OpenAICompatibleAdapter } from "@xpoch/ai-adapter";
-import type { GameState, FactionId, TurnDecision, Faction, Army, City } from "@xpoch/shared";
-import { hexKey, hexNeighbors } from "@xpoch/shared";
+import type { GameState, FactionId, Army, City } from "@xpoch/shared";
+import { hexKey } from "@xpoch/shared";
 
 // === Config ===
 const TICK_MS = parseInt(process.argv[2] ?? "15000", 10);
 const MAP_RADIUS = 10;
-const AI_TIMEOUT_MS = 12_000;
+const AI_TIMEOUT_MS = 45_000;
 
 const OLLAMA_BASE_URL = "http://localhost:11434/v1";
 const OLLAMA_API_KEY = "ollama";
@@ -40,16 +40,19 @@ const FACTION_MODELS: ReadonlyArray<{
   readonly model: string;
   readonly color: string;
 }> = [
-  { id: "f0", name: "蜀汉·GLM",   model: "glm-4.7-flash:latest", color: "purple" },
+  { id: "f0", name: "蜀汉·GLM",    model: "glm-4.7-flash:latest", color: "purple" },
   { id: "f1", name: "魏国·Qwen",   model: "qwen3:8b",             color: "green"  },
-  { id: "f2", name: "吴国·GLM",    model: "glm-4.7-flash:latest", color: "blue"   },
+  { id: "f2", name: "吴国·Gemma",  model: "gemma3:4b",            color: "blue"   },
 ];
+
+const HISTORICAL: Record<string, "shu" | "wei" | "wu"> = { f0: "shu", f1: "wei", f2: "wu" };
 
 const FACTIONS = FACTION_MODELS.map((f) => ({
   id: f.id,
   name: f.name,
   modelProvider: "ollama" as const,
   color: f.color,
+  historicalFaction: HISTORICAL[f.id] ?? ("neutral" as const),
 }));
 
 // === ANSI Colors ===
@@ -271,18 +274,6 @@ async function checkOllama(): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-// === Empty decision fallback ===
-function emptyDecision(factionId: FactionId): TurnDecision {
-  return {
-    factionId,
-    armies: [],
-    buildOrders: [],
-    recruitOrders: [],
-    techOrders: [],
-    diplomacyOrders: [],
-  };
 }
 
 // === Game Loop ===
