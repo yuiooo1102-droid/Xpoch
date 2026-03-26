@@ -163,7 +163,8 @@ const FORMAT_BLOCK = `ACT format JSON:
 "research":"tech_id_or_null",
 "diplomacy":[{"action":"declare_war|propose_alliance|offer_peace","targetFactionId":"faction_id"}]}
 train costs: inf=${TROOP_STATS.infantry.trainCost.gold}g/${TROOP_STATS.infantry.trainCost.food}f cav=${TROOP_STATS.cavalry.trainCost.gold}g/${TROOP_STATS.cavalry.trainCost.food}f arc=${TROOP_STATS.archer.trainCost.gold}g/${TROOP_STATS.archer.trainCost.food}f
-Trump: inf>cav>arc>inf. Armies march to target hex then battle.`;
+Trump: inf>cav>arc>inf. Armies march to target hex then battle.
+Respond with JSON ONLY. No explanation. /no_think`;
 
 // === Helpers ===
 
