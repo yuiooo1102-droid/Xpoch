@@ -1,5 +1,5 @@
 import type { GameState, FactionId, AIAdapter, TurnDecision } from "@xpoch/shared";
-import { executeTurnDecision, processEconomy, processCityProduction, checkVictory, checkEliminations, advanceTick, addLogEntry } from "@xpoch/engine";
+import { executeTurnDecision, processEconomy, processCityProduction, autoFoundCities, checkVictory, checkEliminations, advanceTick, addLogEntry } from "@xpoch/engine";
 
 export class GameLoop {
   private state: GameState;
@@ -65,9 +65,23 @@ export class GameLoop {
       newState = executeTurnDecision(newState, decision);
     }
 
+    newState = autoFoundCities(newState);
     newState = processCityProduction(newState);
     newState = processEconomy(newState);
     newState = checkEliminations(newState);
+
+    // Check victory after eliminations so last-tick kills produce a winner
+    const postWinner = checkVictory(newState);
+    if (postWinner) {
+      newState = { ...newState, winner: postWinner };
+      newState = addLogEntry(
+        newState,
+        `${newState.factions.get(postWinner)?.name} has WON the game!`,
+        "system",
+        [postWinner],
+      );
+    }
+
     newState = advanceTick(newState);
 
     this.state = newState;

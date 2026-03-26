@@ -140,14 +140,13 @@ describe("validateMilitaryOrder", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("rejects move into hex with enemy units", () => {
+  it("accepts move into hex with enemy units (executor auto-converts to attack)", () => {
     const unit = createUnit();
     const enemy = createUnit({ id: "u2", factionId: "f2", coord: { q: 1, r: 0 } });
     const state = createState({ units: new Map([["u1", unit], ["u2", enemy]]) });
     const order: MilitaryOrder = { unitId: "u1", action: "move", to: { q: 1, r: 0 } };
     const result = validateMilitaryOrder(state, order, "f1");
-    expect(result.valid).toBe(false);
-    expect(result.reason).toContain("enemy");
+    expect(result.valid).toBe(true);
   });
 
   it("accepts attack on hex with enemy units", () => {

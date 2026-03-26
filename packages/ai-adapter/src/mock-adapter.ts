@@ -19,6 +19,7 @@ import {
   CAPITAL_DEFENSE_BONUS,
   CITY_DEFENSE_BONUS,
   WALLS_DEFENSE_BONUS,
+  MAX_CITIES,
 } from "@xpoch/shared";
 
 /**
@@ -55,7 +56,13 @@ export class MockAdapter implements AIAdapter {
 // --- Military ---
 
 /** Minimum strength ratio (own / enemy) to launch an attack */
-const ATTACK_STRENGTH_RATIO = 1.0;
+const ATTACK_STRENGTH_RATIO = 0.8;
+
+/** Minimum military units before AI considers training a settler */
+const MIN_UNITS_FOR_SETTLER = 8;
+
+/** Minimum gold to train a settler */
+const MIN_GOLD_FOR_SETTLER = 15;
 
 function buildMilitaryOrders(
   state: GameState,
@@ -67,24 +74,35 @@ function buildMilitaryOrders(
   );
   const ownCities = getCitiesForFaction(state, factionId);
 
-  // Pick the nearest enemy city as the primary target
-  const targetCity = pickTargetCity(ownCities, enemyCities);
+  // Compute total own strength vs total enemy strength for all-in detection
+  const ownTotalStrength = units.reduce((sum, u) => sum + u.strength, 0);
+  const enemyTotalStrength = [...state.units.values()]
+    .filter((u) => u.factionId !== factionId)
+    .reduce((sum, u) => sum + u.strength, 0);
 
-  // Pick a rally hex: a walkable, non-enemy-occupied hex adjacent to the target city
-  const rallyHex = targetCity
-    ? pickRallyHex(state, factionId, targetCity.coord)
-    : null;
-
-  // Estimate enemy defense strength at the target
-  const targetDefenseStrength = targetCity
-    ? estimateDefenseStrength(state, factionId, targetCity)
-    : Infinity;
+  // All-in mode: overwhelm the enemy when we have a large strength advantage
+  const allIn =
+    ownTotalStrength >= enemyTotalStrength * 1.5 &&
+    ownCities.length >= enemyCities.length;
 
   // Track which hexes already have an attack order this tick
   const attackedHexes = new Set<string>();
 
-  return units.map((unit) =>
-    decideMilitaryOrder(
+  // Pre-compute defense strengths and rally hexes per enemy city
+  const cityTargets = enemyCities.map((ec) => ({
+    city: ec,
+    defenseStrength: estimateDefenseStrength(state, factionId, ec),
+    rallyHex: pickRallyHex(state, factionId, ec.coord),
+  }));
+
+  return units.map((unit) => {
+    // Assign each unit to the nearest enemy city
+    const nearest = pickNearestTarget(unit.coord, cityTargets);
+    const targetCity = nearest?.city ?? null;
+    const rallyHex = nearest?.rallyHex ?? null;
+    const targetDefenseStrength = nearest?.defenseStrength ?? Infinity;
+
+    return decideMilitaryOrder(
       state,
       factionId,
       unit,
@@ -92,8 +110,33 @@ function buildMilitaryOrders(
       targetCity,
       targetDefenseStrength,
       attackedHexes,
-    ),
-  );
+      allIn,
+      ownCities,
+    );
+  });
+}
+
+/**
+ * Pick the nearest city target for a given unit position.
+ */
+function pickNearestTarget(
+  unitCoord: HexCoord,
+  targets: readonly { readonly city: City; readonly defenseStrength: number; readonly rallyHex: HexCoord | null }[],
+): { readonly city: City; readonly defenseStrength: number; readonly rallyHex: HexCoord | null } | null {
+  if (targets.length === 0) return null;
+
+  let best = targets[0];
+  let bestDist = hexDistance(unitCoord, best.city.coord);
+
+  for (let i = 1; i < targets.length; i++) {
+    const d = hexDistance(unitCoord, targets[i].city.coord);
+    if (d < bestDist) {
+      bestDist = d;
+      best = targets[i];
+    }
+  }
+
+  return best;
 }
 
 function pickTargetCity(
@@ -182,9 +225,16 @@ function decideMilitaryOrder(
   targetCity: City | null,
   targetDefenseStrength: number,
   attackedHexes: Set<string>,
+  allIn: boolean,
+  ownCities: readonly City[],
 ): MilitaryOrder {
   if (unit.movement <= 0) {
     return { unitId: unit.id, action: "fortify" };
+  }
+
+  // Settlers move away from own cities to found new ones (never attack)
+  if (unit.type === "settler") {
+    return decideSettlerOrder(state, factionId, unit, ownCities);
   }
 
   // Scouts explore
@@ -197,13 +247,20 @@ function decideMilitaryOrder(
     const distToTarget = hexDistance(unit.coord, targetCity.coord);
     if (distToTarget === 1) {
       const friendlyStrength = getStrengthAt(state, unit.coord, factionId);
-      if (friendlyStrength >= targetDefenseStrength * ATTACK_STRENGTH_RATIO) {
-        const targetHexKey = hexKey(targetCity.coord);
-        if (!attackedHexes.has(targetHexKey)) {
-          attackedHexes.add(targetHexKey);
+      // In all-in mode, also count nearby allies on other adjacent hexes
+      const totalSiegeStrength = allIn
+        ? getTotalSiegeStrength(state, factionId, targetCity.coord)
+        : friendlyStrength;
+      const shouldAttack =
+        totalSiegeStrength >= targetDefenseStrength * ATTACK_STRENGTH_RATIO;
+      if (shouldAttack) {
+        const unitHexKey = hexKey(unit.coord);
+        if (!attackedHexes.has(unitHexKey)) {
+          // One attack order per source hex (all units at same hex join automatically)
+          attackedHexes.add(unitHexKey);
           return { unitId: unit.id, action: "attack", to: targetCity.coord };
         }
-        // Already issued attack from this hex; fortify to be pulled into combat
+        // Another unit on this hex already issued the attack; fortify (will join combat)
         return { unitId: unit.id, action: "fortify" };
       }
       // Not strong enough yet -- stay put and wait for reinforcements
@@ -217,10 +274,10 @@ function decideMilitaryOrder(
     const friendlyStrength = getStrengthAt(state, unit.coord, factionId);
     const enemyStrength = getEnemyStrengthAt(state, adjacentEnemyHex, factionId);
 
-    if (friendlyStrength >= enemyStrength) {
-      const hexKeyStr = hexKey(adjacentEnemyHex);
-      if (!attackedHexes.has(hexKeyStr)) {
-        attackedHexes.add(hexKeyStr);
+    if (allIn || friendlyStrength >= enemyStrength * ATTACK_STRENGTH_RATIO) {
+      const unitHexKey = hexKey(unit.coord);
+      if (!attackedHexes.has(unitHexKey)) {
+        attackedHexes.add(unitHexKey);
         return { unitId: unit.id, action: "attack", to: adjacentEnemyHex };
       }
       return { unitId: unit.id, action: "fortify" };
@@ -228,7 +285,7 @@ function decideMilitaryOrder(
     // Outnumbered in field -- retreat toward rally point or fortify
   }
 
-  // Move toward rally hex (or target city if no rally hex)
+  // Move toward rally hex to mass forces before attacking
   const destination = rallyHex ?? (targetCity ? targetCity.coord : null);
   if (destination) {
     const step = findSafeStepToward(state, factionId, unit.coord, destination);
@@ -240,6 +297,49 @@ function decideMilitaryOrder(
   return { unitId: unit.id, action: "fortify" };
 }
 
+/**
+ * Settlers move away from all own cities toward open terrain
+ * to eventually auto-found a new city (handled by engine).
+ */
+function decideSettlerOrder(
+  state: GameState,
+  factionId: FactionId,
+  unit: Unit,
+  ownCities: readonly City[],
+): MilitaryOrder {
+  const allCities = [...state.cities.values()];
+
+  // Find walkable neighbors that are safe (no enemies)
+  const neighbors = hexNeighbors(unit.coord).filter((n) => {
+    const tile = state.tiles.get(hexKey(n));
+    if (!tile || tile.terrain === "water" || tile.terrain === "mountain") return false;
+    const nKey = hexKey(n);
+    const hasEnemy = [...state.units.values()].some(
+      (u) => u.factionId !== factionId && hexKey(u.coord) === nKey,
+    );
+    return !hasEnemy;
+  });
+
+  if (neighbors.length === 0) {
+    return { unitId: unit.id, action: "fortify" };
+  }
+
+  // Prefer the neighbor that maximizes minimum distance from ALL cities
+  const best = neighbors.reduce((a, b) => {
+    const aMinDist = allCities.reduce(
+      (min, c) => Math.min(min, hexDistance(a, c.coord)),
+      Infinity,
+    );
+    const bMinDist = allCities.reduce(
+      (min, c) => Math.min(min, hexDistance(b, c.coord)),
+      Infinity,
+    );
+    return aMinDist > bMinDist ? a : b;
+  });
+
+  return { unitId: unit.id, action: "move", to: best };
+}
+
 function decideScoutOrder(
   state: GameState,
   factionId: FactionId,
@@ -249,14 +349,23 @@ function decideScoutOrder(
     (c) => c.factionId === factionId,
   );
 
+  // Collect all hexes occupied by enemy units and their neighbors (danger zone)
+  const enemyHexes = new Set<string>();
+  for (const u of state.units.values()) {
+    if (u.factionId !== factionId) {
+      const ek = hexKey(u.coord);
+      enemyHexes.add(ek);
+      for (const nb of hexNeighbors(u.coord)) {
+        enemyHexes.add(hexKey(nb));
+      }
+    }
+  }
+
   const neighbors = hexNeighbors(unit.coord).filter((n) => {
     const tile = state.tiles.get(hexKey(n));
     if (!tile || tile.terrain === "water") return false;
-    // Avoid hexes with enemy units
-    const hasEnemy = [...state.units.values()].some(
-      (u) => u.factionId !== factionId && hexKey(u.coord) === hexKey(n),
-    );
-    return !hasEnemy;
+    // Avoid hexes with enemy units AND hexes adjacent to enemy units
+    return !enemyHexes.has(hexKey(n));
   });
 
   if (neighbors.length === 0) {
@@ -316,6 +425,22 @@ function findSafeStepToward(
   );
 }
 
+/**
+ * Sum friendly strength on all hexes adjacent to a target (siege force).
+ */
+function getTotalSiegeStrength(
+  state: GameState,
+  factionId: FactionId,
+  targetCoord: HexCoord,
+): number {
+  let total = 0;
+  const adjacentHexes = hexNeighbors(targetCoord);
+  for (const adj of adjacentHexes) {
+    total += getStrengthAt(state, adj, factionId);
+  }
+  return total;
+}
+
 function getStrengthAt(
   state: GameState,
   coord: HexCoord,
@@ -367,7 +492,9 @@ function buildCityOrders(
   cities: readonly City[],
   gold: number,
 ): readonly CityOrder[] {
-  return cities.map((city) => decideCityOrder(state, factionId, city, gold));
+  return cities.map((city, index) =>
+    decideCityOrder(state, factionId, city, gold, index, cities.length),
+  );
 }
 
 function decideCityOrder(
@@ -375,12 +502,34 @@ function decideCityOrder(
   factionId: FactionId,
   city: City,
   gold: number,
+  cityIndex: number,
+  totalCities: number,
 ): CityOrder {
   const faction = state.factions.get(factionId)!;
 
   // If already building something, continue
   if (city.currentProject) {
     return { cityId: city.id, action: "idle" };
+  }
+
+  const ownUnits = [...state.units.values()].filter(
+    (u) => u.factionId === factionId,
+  );
+  const militaryUnits = ownUnits.filter(
+    (u) => u.type !== "settler" && u.type !== "scout",
+  );
+  const settlerCount = ownUnits.filter((u) => u.type === "settler").length;
+
+  // Train a settler from the FIRST city if we can expand and have enough military
+  // Only one settler at a time, and only from city index 0
+  if (
+    cityIndex === 0 &&
+    totalCities < MAX_CITIES &&
+    settlerCount === 0 &&
+    militaryUnits.length >= MIN_UNITS_FOR_SETTLER &&
+    gold >= MIN_GOLD_FOR_SETTLER
+  ) {
+    return { cityId: city.id, action: "train", target: "settler" };
   }
 
   // Try to build buildings in priority order
@@ -407,12 +556,9 @@ function decideCityOrder(
 
   // Train military units if gold allows
   if (gold >= UNIT_STATS.infantry.cost) {
-    const ownUnits = [...state.units.values()].filter(
-      (u) => u.factionId === factionId,
-    );
-    const infantryCount = ownUnits.filter((u) => u.type === "infantry").length;
-    const cavalryCount = ownUnits.filter((u) => u.type === "cavalry").length;
-    const artilleryCount = ownUnits.filter((u) => u.type === "artillery").length;
+    const infantryCount = militaryUnits.filter((u) => u.type === "infantry").length;
+    const cavalryCount = militaryUnits.filter((u) => u.type === "cavalry").length;
+    const artilleryCount = militaryUnits.filter((u) => u.type === "artillery").length;
 
     // Build a balanced army: 2 infantry : 1 cavalry : 1 artillery
     let unitType: string = "infantry";

@@ -77,8 +77,21 @@ function executeMilitaryOrder(
   order: MilitaryOrder,
   factionId: FactionId,
 ): GameState {
+  // Skip orders for units that were killed earlier this tick (stale references)
+  const unit = state.units.get(order.unitId);
+  if (!unit) return state;
+
   const validation = validateMilitaryOrder(state, order, factionId);
   if (!validation.valid) {
+    // Stale attack target: enemy moved away — fall back to move if hex is empty
+    if (
+      order.action === "attack" &&
+      validation.reason === "No enemy units or city at attack target" &&
+      order.to
+    ) {
+      return executeMoveOrAttack(state, { ...order, action: "move" }, factionId);
+    }
+
     return addLogEntry(
       state,
       `[${factionId}] Invalid military order: ${validation.reason}`,

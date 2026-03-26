@@ -74,13 +74,7 @@ function validateMove(
     return fail("Cannot move to water without navigation tech");
   }
 
-  // Check for enemy units at target
-  for (const u of state.units.values()) {
-    if (hexKey(u.coord) === hexKey(to) && u.factionId !== factionId) {
-      return fail("Cannot move into hex with enemy units — use attack instead");
-    }
-  }
-
+  // Enemy units at target are handled by the executor (auto-converts to attack)
   return OK;
 }
 

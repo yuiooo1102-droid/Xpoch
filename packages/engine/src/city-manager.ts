@@ -15,6 +15,7 @@ import {
   BUILDING_STATS,
   RUSH_GOLD_MULTIPLIER,
   MIN_CITY_DISTANCE,
+  MAX_CITIES,
   UNIT_STATS,
 } from "@xpoch/shared";
 import {
@@ -232,6 +233,52 @@ function completeProject(state: GameState, cityId: CityId): GameState {
 
   // Clear the project
   s = updateCity(s, cityId, { currentProject: null });
+
+  return s;
+}
+
+/**
+ * Auto-found cities for settler units that are far enough from all existing cities
+ * and standing on valid (non-water, non-mountain) terrain.
+ * Called each tick from the game loop.
+ */
+export function autoFoundCities(state: GameState): GameState {
+  let s = state;
+
+  // Collect settler units (snapshot the IDs first since founding removes the unit)
+  const settlers = [...s.units.values()].filter((u) => u.type === "settler");
+
+  for (const settler of settlers) {
+    // Check if settler still exists (may have been consumed in earlier iteration)
+    if (!s.units.has(settler.id)) continue;
+
+    const coord = settler.coord;
+    const tile = s.tiles.get(hexKey(coord));
+
+    // Must be on valid terrain
+    if (!tile || tile.terrain === "water" || tile.terrain === "mountain") continue;
+
+    // Must be far enough from ALL existing cities
+    let tooClose = false;
+    for (const city of s.cities.values()) {
+      if (hexDistance(coord, city.coord) < MIN_CITY_DISTANCE) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) continue;
+
+    // Check faction city limit — don't exceed MAX_CITIES
+    const factionCityCount = [...s.cities.values()].filter(
+      (c) => c.factionId === settler.factionId,
+    ).length;
+    if (factionCityCount >= MAX_CITIES) continue;
+
+    const factionName = s.factions.get(settler.factionId)?.name ?? settler.factionId;
+    const cityName = `${factionName} Colony ${factionCityCount}`;
+
+    s = foundCity(s, settler.id, cityName);
+  }
 
   return s;
 }

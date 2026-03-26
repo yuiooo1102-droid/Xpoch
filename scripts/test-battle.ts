@@ -12,6 +12,7 @@ import {
   executeTurnDecision,
   processEconomy,
   processCityProduction,
+  autoFoundCities,
   checkVictory,
   checkEliminations,
   advanceTick,
@@ -88,9 +89,18 @@ async function runBattle(): Promise<void> {
     for (const d of decisions) {
       state = executeTurnDecision(state, d);
     }
+    state = autoFoundCities(state);
     state = processCityProduction(state);
     state = processEconomy(state);
     state = checkEliminations(state);
+
+    // Check victory after eliminations (so last-tick eliminations produce a winner)
+    const postWinner = checkVictory(state);
+    if (postWinner) {
+      state = { ...state, winner: postWinner };
+      state = addLogEntry(state, `${state.factions.get(postWinner)?.name} WINS!`, "system", [postWinner]);
+    }
+
     state = advanceTick(state);
 
     // Collect new events
