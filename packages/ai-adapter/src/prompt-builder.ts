@@ -2,29 +2,31 @@ import type {
   GameState,
   FactionId,
   City,
-  Unit,
-  Tile,
+  Army,
+  General,
 } from "@xpoch/shared";
-import { hexKey, hexDistance, hexDisk, TECH_TREE, UNIT_STATS } from "@xpoch/shared";
+import { hexKey, hexDistance, hexDisk, TECH_TREE, TROOP_STATS } from "@xpoch/shared";
 
 /**
  * Build a compact prompt for AI decision-making.
  * Optimized for minimal token usage while preserving strategic info.
+ * v3: shows generals, armies (general + troops), cities, territory, resources.
  */
 export function buildPrompt(state: GameState, factionId: FactionId): string {
   const f = state.factions.get(factionId)!;
   const cities = getFactionCities(state, factionId);
-  const units = getFactionUnits(state, factionId);
-  const unitIndex = buildShortIds(units);
+  const armies = getFactionArmies(state, factionId);
+  const generals = getFactionGenerals(state, factionId);
 
   return [
     `You are "${f.name}" in a hex war game. Destroy all enemies.`,
-    `T${state.tick} G:${f.gold} F:${f.food} R:${f.research} Techs:${f.techs.length}`,
+    `T${state.tick} G:${f.resources.gold} F:${f.resources.food} W:${f.resources.wood} I:${f.resources.iron} Terr:${f.territoryCount} Techs:${f.techs.length}`,
     "",
-    compactCities(state, cities),
-    compactUnits(units, unitIndex),
+    compactGenerals(generals, state),
+    compactArmies(armies, state),
+    compactCities(cities),
     compactTech(f.techs),
-    compactThreats(state, factionId, cities, units),
+    compactThreats(state, factionId, cities, armies),
     compactDiplomacy(state, factionId),
     "",
     FORMAT_BLOCK,
@@ -33,42 +35,38 @@ export function buildPrompt(state: GameState, factionId: FactionId): string {
 
 // === Compact sections ===
 
-function compactCities(state: GameState, cities: readonly City[]): string {
-  const lines = cities.map((c) => {
-    const blds = getOutskirtBuildings(state, c.id);
-    const proj = c.currentProject
-      ? `${c.currentProject.target}(${c.currentProject.invested}/${c.currentProject.cost})`
-      : "-";
-    const cap = c.isCapital ? "*" : "";
-    return `  ${cap}${c.name}[${hexKey(c.coord)}] prod:${c.production} proj:${proj} bld:[${blds.join(",")}]`;
+function compactGenerals(generals: readonly General[], state: GameState): string {
+  const lines = generals.map((g) => {
+    const status = g.alive
+      ? `lv${g.level}`
+      : `dead(respawn T${g.respawnTick ?? "?"})`;
+    return `  ${g.name}[${g.id}] ${g.specialty ?? "all"} ${status}`;
   });
-  return `CITIES(${cities.length}):\n${lines.join("\n")}`;
+  return `GENERALS(${generals.length}):\n${lines.join("\n")}`;
 }
 
-function compactUnits(units: readonly Unit[], idx: ReadonlyMap<string, string>): string {
-  // Group by type and summarize
-  const byType = new Map<string, { count: number; totalStr: number; positions: string[] }>();
-  for (const u of units) {
-    const entry = byType.get(u.type) ?? { count: 0, totalStr: 0, positions: [] };
-    entry.count++;
-    entry.totalStr += u.strength;
-    entry.positions.push(`${idx.get(u.id)}@${hexKey(u.coord)}`);
-    byType.set(u.type, entry);
-  }
+function compactArmies(armies: readonly Army[], state: GameState): string {
+  if (armies.length === 0) return "ARMIES(0): none";
 
-  const summary = [...byType.entries()]
-    .map(([t, d]) => `${t}:${d.count}(str${d.totalStr})`)
-    .join(" ");
+  const lines = armies.map((a) => {
+    const gen = state.generals.get(a.generalId);
+    const genName = gen ? gen.name : a.generalId;
+    const troops = `inf:${a.troops.infantry} cav:${a.troops.cavalry} arc:${a.troops.archer}`;
+    return `  ${genName}@${hexKey(a.coord)} ${troops} [${a.state}]`;
+  });
+  return `ARMIES(${armies.length}):\n${lines.join("\n")}`;
+}
 
-  // Only list units individually if <= 15, otherwise just summary
-  if (units.length <= 15) {
-    const lines = units.map((u) =>
-      `  ${idx.get(u.id)} ${u.type} s${u.strength} @${hexKey(u.coord)} m${u.movement}`
-    );
-    return `UNITS(${units.length}) ${summary}:\n${lines.join("\n")}`;
-  }
-
-  return `UNITS(${units.length}) ${summary}`;
+function compactCities(cities: readonly City[]): string {
+  const lines = cities.map((c) => {
+    const cap = c.isCapital ? "*" : "";
+    const garr = `gar:${c.garrison.infantry}/${c.garrison.cavalry}/${c.garrison.archer}`;
+    const training = c.trainingQueue
+      ? `train:${c.trainingQueue.troopType}(${c.trainingQueue.ticksRemaining}t)`
+      : "train:-";
+    return `  ${cap}${c.name}[${hexKey(c.coord)}] lv${c.level} walls:${c.walls} ${garr} ${training}`;
+  });
+  return `CITIES(${cities.length}):\n${lines.join("\n")}`;
 }
 
 function compactTech(techs: readonly string[]): string {
@@ -78,9 +76,13 @@ function compactTech(techs: readonly string[]): string {
   });
 
   const avail = available
-    .sort((a, b) => a.cost - b.cost)
+    .sort((a, b) => {
+      const aCost = a.cost.gold + a.cost.food + a.cost.wood + a.cost.iron;
+      const bCost = b.cost.gold + b.cost.food + b.cost.wood + b.cost.iron;
+      return aCost - bCost;
+    })
     .slice(0, 5)
-    .map((t) => `${t.id}(${t.cost})`)
+    .map((t) => `${t.id}(${t.cost.gold}g)`)
     .join(" ");
 
   return `TECH known:[${techs.join(",")}] avail:[${avail}]`;
@@ -90,30 +92,30 @@ function compactThreats(
   state: GameState,
   factionId: FactionId,
   cities: readonly City[],
-  units: readonly Unit[],
+  armies: readonly Army[],
 ): string {
-  // Only report enemy units and cities within vision — and only the interesting ones
-  const visible = computeVisibleHexes(cities, units);
+  const visible = computeVisibleHexes(cities, armies);
   const enemies: string[] = [];
   const enemyCities: string[] = [];
 
-  // Collect enemy units in vision
-  const seenEnemies = new Map<string, { type: string; count: number; totalStr: number; coord: string }>();
-  for (const u of state.units.values()) {
-    if (u.factionId === factionId) continue;
-    const key = hexKey(u.coord);
+  // Collect enemy armies in vision
+  const seenEnemies = new Map<string, { count: number; totalTroops: number; coord: string }>();
+  for (const a of state.armies.values()) {
+    if (a.factionId === factionId) continue;
+    const key = hexKey(a.coord);
     if (!visible.has(key)) continue;
+    const troopCount = a.troops.infantry + a.troops.cavalry + a.troops.archer;
     const existing = seenEnemies.get(key);
     if (existing) {
       existing.count++;
-      existing.totalStr += u.strength;
+      existing.totalTroops += troopCount;
     } else {
-      seenEnemies.set(key, { type: u.type, count: 1, totalStr: u.strength, coord: key });
+      seenEnemies.set(key, { count: 1, totalTroops: troopCount, coord: key });
     }
   }
 
   for (const [, e] of seenEnemies) {
-    enemies.push(`${e.count}x@${e.coord}(str${e.totalStr})`);
+    enemies.push(`${e.count}army@${e.coord}(${e.totalTroops}troops)`);
   }
 
   // Collect enemy cities in vision
@@ -124,19 +126,19 @@ function compactThreats(
     enemyCities.push(`${city.name}[${hexKey(city.coord)}]${city.isCapital ? "*" : ""}(${owner?.name ?? city.factionId})`);
   }
 
-  // Faction summary (high level threat assessment)
+  // Faction summary
   const factionSummary = [...state.factions.values()]
     .filter((f) => f.id !== factionId && f.alive)
     .map((f) => {
       const fc = [...state.cities.values()].filter((c) => c.factionId === f.id).length;
-      const fu = [...state.units.values()].filter((u) => u.factionId === f.id).length;
-      return `${f.name}:${fc}c/${fu}u`;
+      const fa = [...state.armies.values()].filter((a) => a.factionId === f.id).length;
+      return `${f.name}:${fc}c/${fa}a`;
     })
     .join(" ");
 
   const parts = [`ENEMIES: ${factionSummary}`];
   if (enemyCities.length > 0) parts.push(`  visible_cities: ${enemyCities.join(" ")}`);
-  if (enemies.length > 0) parts.push(`  visible_units: ${enemies.join(" ")}`);
+  if (enemies.length > 0) parts.push(`  visible_armies: ${enemies.join(" ")}`);
   return parts.join("\n");
 }
 
@@ -153,14 +155,15 @@ function compactDiplomacy(state: GameState, factionId: FactionId): string {
   return rels.length > 0 ? `DIPLO: ${rels.join(" ")}` : "DIPLO: none";
 }
 
-// Static format block — never changes
+// Static format block
 const FORMAT_BLOCK = `ACT format JSON:
-{"military":[{"unit_id":"ID","action":"move|attack|fortify","to":"q,r"}],
-"cities":[{"city_id":"ID","action":"train|build|idle","target":"type","hex":"q,r"}],
+{"armies":[{"generalId":"ID","action":"march|attack|retreat|garrison|idle","target":{"q":0,"r":0}}],
+"cities":[{"cityId":"ID","action":"train|upgrade_walls|upgrade_city|idle","troopType":"infantry|cavalry|archer","amount":100}],
+"build":[{"hex":{"q":0,"r":0},"building":"farm|lumber_mill|mine|market|barracks|watchtower|fortress"}],
 "research":"tech_id_or_null",
-"diplomacy":[{"action":"declare_war|propose_alliance|offer_peace","target":"faction_id"}]}
-train costs: inf=${UNIT_STATS.infantry.cost}g cav=${UNIT_STATS.cavalry.cost}g art=${UNIT_STATS.artillery.cost}g set=${UNIT_STATS.settler.cost}g sct=${UNIT_STATS.scout.cost}g
-Trump: inf>cav>art>inf. Attacker moves into enemy hex.`;
+"diplomacy":[{"action":"declare_war|propose_alliance|offer_peace","targetFactionId":"faction_id"}]}
+train costs: inf=${TROOP_STATS.infantry.trainCost.gold}g/${TROOP_STATS.infantry.trainCost.food}f cav=${TROOP_STATS.cavalry.trainCost.gold}g/${TROOP_STATS.cavalry.trainCost.food}f arc=${TROOP_STATS.archer.trainCost.gold}g/${TROOP_STATS.archer.trainCost.food}f
+Trump: inf>cav>arc>inf. Armies march to target hex then battle.`;
 
 // === Helpers ===
 
@@ -168,32 +171,17 @@ function getFactionCities(state: GameState, factionId: FactionId): City[] {
   return [...state.cities.values()].filter((c) => c.factionId === factionId);
 }
 
-function getFactionUnits(state: GameState, factionId: FactionId): Unit[] {
-  return [...state.units.values()].filter((u) => u.factionId === factionId);
+function getFactionArmies(state: GameState, factionId: FactionId): Army[] {
+  return [...state.armies.values()].filter((a) => a.factionId === factionId);
 }
 
-function buildShortIds(units: readonly Unit[]): ReadonlyMap<string, string> {
-  const map = new Map<string, string>();
-  let i = 0;
-  for (const u of units) {
-    map.set(u.id, `u${i++}`);
-  }
-  return map;
-}
-
-function getOutskirtBuildings(state: GameState, cityId: string): string[] {
-  const buildings: string[] = [];
-  for (const tile of state.tiles.values()) {
-    if (tile.isCityOutskirt === cityId && tile.building) {
-      buildings.push(tile.building);
-    }
-  }
-  return buildings;
+function getFactionGenerals(state: GameState, factionId: FactionId): General[] {
+  return [...state.generals.values()].filter((g) => g.factionId === factionId);
 }
 
 function computeVisibleHexes(
   cities: readonly City[],
-  units: readonly Unit[],
+  armies: readonly Army[],
 ): Set<string> {
   const visible = new Set<string>();
   for (const city of cities) {
@@ -201,9 +189,8 @@ function computeVisibleHexes(
       visible.add(hexKey(coord));
     }
   }
-  for (const unit of units) {
-    const range = unit.type === "scout" ? 3 : 2;
-    for (const coord of hexDisk(unit.coord, range)) {
+  for (const army of armies) {
+    for (const coord of hexDisk(army.coord, 2)) {
       visible.add(hexKey(coord));
     }
   }

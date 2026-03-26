@@ -1,17 +1,21 @@
 import type {
   GameState,
   FactionId,
-  MilitaryOrder,
+  ArmyOrder,
   CityOrder,
+  BuildOrder,
   DiplomacyOrder,
-  HexCoord,
+  Resources,
 } from "@xpoch/shared";
 import {
   hexKey,
   hexDistance,
-  UNIT_STATS,
-  BUILDING_STATS,
-  RUSH_GOLD_MULTIPLIER,
+  TROOP_STATS,
+  BUILDING_DEFS,
+  CITY_UPGRADE_COST,
+  WALL_UPGRADE_COST,
+  MAX_CITY_LEVEL,
+  MAX_WALLS,
   TERRAIN_MOVEMENT_COST,
 } from "@xpoch/shared";
 import { hasTech } from "./tech-tree";
@@ -29,99 +33,111 @@ function fail(reason: string): ValidationResult {
   return { valid: false, reason };
 }
 
-// === Military validation ===
+function canAfford(have: Resources, cost: Resources): boolean {
+  return (
+    have.gold >= cost.gold &&
+    have.food >= cost.food &&
+    have.wood >= cost.wood &&
+    have.iron >= cost.iron
+  );
+}
 
-export function validateMilitaryOrder(
+// === Army Order validation ===
+
+export function validateArmyOrder(
   state: GameState,
-  order: MilitaryOrder,
+  order: ArmyOrder,
   factionId: FactionId,
 ): ValidationResult {
-  const unit = state.units.get(order.unitId);
-  if (!unit) return fail("Unit does not exist");
-  if (unit.factionId !== factionId) return fail("Unit does not belong to faction");
+  // Find the army led by this general
+  const army = [...state.armies.values()].find(
+    (a) => a.generalId === order.generalId && a.factionId === factionId,
+  );
 
   switch (order.action) {
-    case "move":
-      return validateMove(state, unit.coord, order.to, unit.movement, factionId);
-    case "attack":
-      return validateAttack(state, unit.coord, order.to, factionId);
-    case "fortify":
+    case "idle":
       return OK;
-    case "disband":
-      return OK;
-    default:
-      return fail(`Unknown military action: ${order.action}`);
-  }
-}
 
-function validateMove(
-  state: GameState,
-  from: HexCoord,
-  to: HexCoord | undefined,
-  movement: number,
-  factionId: FactionId,
-): ValidationResult {
-  if (!to) return fail("Move requires target hex");
+    case "march": {
+      if (!army) return fail("No army found for this general");
+      if (!order.target) return fail("March requires a target hex");
 
-  const dist = hexDistance(from, to);
-  if (dist === 0) return fail("Cannot move to current position");
-  if (dist > movement) return fail("Target hex is out of movement range");
+      const targetTile = state.tiles.get(hexKey(order.target));
+      if (!targetTile) return fail("Target hex does not exist");
 
-  const targetTile = state.tiles.get(hexKey(to));
-  if (!targetTile) return fail("Target hex does not exist");
-
-  if (targetTile.terrain === "water" && !hasTech(state, factionId, "navigation")) {
-    return fail("Cannot move to water without navigation tech");
-  }
-
-  // Enemy units at target are handled by the executor (auto-converts to attack)
-  return OK;
-}
-
-function validateAttack(
-  state: GameState,
-  from: HexCoord,
-  to: HexCoord | undefined,
-  factionId: FactionId,
-): ValidationResult {
-  if (!to) return fail("Attack requires target hex");
-
-  const dist = hexDistance(from, to);
-  if (dist === 0) return fail("Cannot attack own position");
-  if (dist > 1) return fail("Attack target must be adjacent");
-
-  const targetTile = state.tiles.get(hexKey(to));
-  if (!targetTile) return fail("Target hex does not exist");
-
-  // Must have enemy units or enemy city at target
-  const targetKey = hexKey(to);
-  let hasEnemyPresence = false;
-
-  for (const u of state.units.values()) {
-    if (hexKey(u.coord) === targetKey && u.factionId !== factionId) {
-      hasEnemyPresence = true;
-      break;
-    }
-  }
-
-  if (!hasEnemyPresence) {
-    // Check for enemy city
-    for (const city of state.cities.values()) {
-      if (hexKey(city.coord) === targetKey && city.factionId !== factionId) {
-        hasEnemyPresence = true;
-        break;
+      if (targetTile.terrain === "water") {
+        return fail("Cannot march to water");
       }
+
+      return OK;
     }
-  }
 
-  if (!hasEnemyPresence) {
-    return fail("No enemy units or city at attack target");
-  }
+    case "attack": {
+      if (!army) return fail("No army found for this general");
+      if (!order.target) return fail("Attack requires a target hex");
 
-  return OK;
+      const dist = hexDistance(army.coord, order.target);
+      if (dist > 1) return fail("Attack target must be adjacent (distance 1)");
+
+      const targetKey = hexKey(order.target);
+      let hasEnemyPresence = false;
+
+      // Check for enemy armies
+      for (const a of state.armies.values()) {
+        if (hexKey(a.coord) === targetKey && a.factionId !== factionId) {
+          hasEnemyPresence = true;
+          break;
+        }
+      }
+
+      // Check for enemy city
+      if (!hasEnemyPresence) {
+        for (const city of state.cities.values()) {
+          if (hexKey(city.coord) === targetKey && city.factionId !== factionId) {
+            hasEnemyPresence = true;
+            break;
+          }
+        }
+      }
+
+      if (!hasEnemyPresence) {
+        return fail("No enemy army or city at attack target");
+      }
+
+      return OK;
+    }
+
+    case "retreat": {
+      if (!army) return fail("No army found for this general");
+      return OK;
+    }
+
+    case "garrison": {
+      if (!army) return fail("No army found for this general");
+
+      // Must be at a friendly city
+      const armyKey = hexKey(army.coord);
+      let atFriendlyCity = false;
+      for (const city of state.cities.values()) {
+        if (hexKey(city.coord) === armyKey && city.factionId === factionId) {
+          atFriendlyCity = true;
+          break;
+        }
+      }
+
+      if (!atFriendlyCity) {
+        return fail("Army must be at a friendly city to garrison");
+      }
+
+      return OK;
+    }
+
+    default:
+      return fail(`Unknown army action: ${(order as ArmyOrder).action}`);
+  }
 }
 
-// === City validation ===
+// === City Order validation ===
 
 export function validateCityOrder(
   state: GameState,
@@ -136,88 +152,104 @@ export function validateCityOrder(
   if (!faction) return fail("Faction does not exist");
 
   switch (order.action) {
-    case "train":
-      return validateTrain(state, faction, order.target);
-    case "build":
-      return validateBuild(state, factionId, order.target, order.hex);
-    case "rush":
-      return validateRush(city, faction);
+    case "train": {
+      if (!order.troopType) return fail("Train requires a troop type");
+
+      const stats = TROOP_STATS[order.troopType];
+      if (!stats) return fail(`Unknown troop type: ${order.troopType}`);
+
+      if (city.trainingQueue !== null) {
+        return fail("City already has a training queue");
+      }
+
+      // Check resource cost: trainCost is per 100 troops
+      const amount = order.amount ?? 100;
+      const batchCount = amount / 100;
+      const cost: Resources = {
+        gold: stats.trainCost.gold * batchCount,
+        food: stats.trainCost.food * batchCount,
+        wood: stats.trainCost.wood * batchCount,
+        iron: stats.trainCost.iron * batchCount,
+      };
+
+      if (!canAfford(faction.resources, cost)) {
+        return fail("Not enough resources to train troops");
+      }
+
+      return OK;
+    }
+
+    case "upgrade_walls": {
+      if (city.walls >= MAX_WALLS) {
+        return fail("Walls already at maximum level");
+      }
+      if (!canAfford(faction.resources, WALL_UPGRADE_COST)) {
+        return fail("Not enough resources to upgrade walls");
+      }
+      return OK;
+    }
+
+    case "upgrade_city": {
+      if (city.level >= MAX_CITY_LEVEL) {
+        return fail("City already at maximum level");
+      }
+      if (!canAfford(faction.resources, CITY_UPGRADE_COST)) {
+        return fail("Not enough resources to upgrade city");
+      }
+      return OK;
+    }
+
     case "idle":
       return OK;
+
     default:
-      return fail(`Unknown city action: ${order.action}`);
+      return fail(`Unknown city action: ${(order as CityOrder).action}`);
   }
 }
 
-function validateTrain(
+// === Build Order validation ===
+
+export function validateBuildOrder(
   state: GameState,
-  faction: { readonly gold: number },
-  target: string | undefined,
-): ValidationResult {
-  if (!target) return fail("Train requires a unit type target");
-
-  const stats = UNIT_STATS[target as keyof typeof UNIT_STATS];
-  if (!stats) return fail(`Unknown unit type: ${target}`);
-
-  if (faction.gold < stats.cost) {
-    return fail("Not enough gold to train unit");
-  }
-
-  return OK;
-}
-
-function validateBuild(
-  state: GameState,
+  order: BuildOrder,
   factionId: FactionId,
-  target: string | undefined,
-  hex: HexCoord | undefined,
 ): ValidationResult {
-  if (!target) return fail("Build requires a building type target");
+  const tile = state.tiles.get(hexKey(order.hex));
+  if (!tile) return fail("Target hex does not exist");
+  if (tile.owner !== factionId) return fail("Tile is not owned by faction");
+  if (tile.building !== null) return fail("Tile already has a building");
+  if (tile.cityId !== null) return fail("Cannot build on a city center tile");
 
-  const stats = BUILDING_STATS[target as keyof typeof BUILDING_STATS];
-  if (!stats) return fail(`Unknown building type: ${target}`);
+  const buildingDef = BUILDING_DEFS[order.building];
+  if (!buildingDef) return fail(`Unknown building type: ${order.building}`);
 
-  // Check tech requirement
-  if (stats.requiresTech && !hasTech(state, factionId, stats.requiresTech)) {
-    return fail(`Building requires tech: ${stats.requiresTech}`);
-  }
-
-  // Check terrain if hex specified
-  if (hex) {
-    const tile = state.tiles.get(hexKey(hex));
-    if (!tile) return fail("Target hex does not exist");
-
-    if (!stats.anyLand) {
-      if (!stats.terrains.includes(tile.terrain)) {
-        return fail(`Building cannot be placed on ${tile.terrain}`);
-      }
-    } else if (tile.terrain === "water") {
+  // Check terrain
+  if (buildingDef.terrain === "any_land") {
+    if (tile.terrain === "water") {
       return fail("Cannot place land building on water");
+    }
+  } else {
+    if (!buildingDef.terrain.includes(tile.terrain)) {
+      return fail(`Building cannot be placed on ${tile.terrain}`);
     }
   }
 
-  return OK;
-}
-
-function validateRush(
-  city: { readonly currentProject: { readonly cost: number; readonly invested: number } | null },
-  faction: { readonly gold: number },
-): ValidationResult {
-  if (!city.currentProject) {
-    return fail("City has no active project to rush");
+  // Check tech requirement
+  if (buildingDef.requiresTech && !hasTech(state, factionId, buildingDef.requiresTech)) {
+    return fail(`Building requires tech: ${buildingDef.requiresTech}`);
   }
 
-  const remaining = city.currentProject.cost - city.currentProject.invested;
-  const rushCost = remaining * RUSH_GOLD_MULTIPLIER;
-
-  if (faction.gold < rushCost) {
-    return fail("Not enough gold to rush production");
+  // Check cost
+  const faction = state.factions.get(factionId);
+  if (!faction) return fail("Faction does not exist");
+  if (!canAfford(faction.resources, buildingDef.cost)) {
+    return fail("Not enough resources to build");
   }
 
   return OK;
 }
 
-// === Diplomacy validation ===
+// === Diplomacy Order validation ===
 
 export function validateDiplomacyOrder(
   state: GameState,
@@ -237,13 +269,13 @@ export function validateDiplomacyOrder(
   if (!faction) return fail("Faction does not exist");
 
   switch (order.action) {
-    case "send_gold": {
-      if (!order.amount || order.amount <= 0) return fail("send_gold requires a positive amount");
-      if (faction.gold < order.amount) return fail("Not enough gold to send");
-      return OK;
-    }
-    case "demand_tribute": {
-      if (!order.amount || order.amount <= 0) return fail("demand_tribute requires a positive amount");
+    case "send_tribute": {
+      if (!order.amount || order.amount <= 0) {
+        return fail("send_tribute requires a positive amount");
+      }
+      if (faction.resources.gold < order.amount) {
+        return fail("Not enough gold to send as tribute");
+      }
       return OK;
     }
     case "declare_war":
@@ -252,6 +284,6 @@ export function validateDiplomacyOrder(
     case "offer_peace":
       return OK;
     default:
-      return fail(`Unknown diplomacy action: ${order.action}`);
+      return fail(`Unknown diplomacy action: ${(order as DiplomacyOrder).action}`);
   }
 }

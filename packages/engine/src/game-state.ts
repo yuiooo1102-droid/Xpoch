@@ -5,7 +5,10 @@ import type {
   Tile,
   HexCoord,
   DiplomacyState,
-  Unit,
+  Army,
+  ArmyId,
+  General,
+  GeneralId,
   City,
   CityId,
   LogEntry,
@@ -15,11 +18,11 @@ import {
   hexDisk,
   hexDistance,
   hexNeighbors,
-  UNIT_STATS,
-  STARTING_GOLD,
-  STARTING_FOOD,
-  STARTING_TECHS,
-  WONDER_DEFS,
+  STARTING_RESOURCES,
+  STARTING_GARRISON,
+  STARTING_ARMY_TROOPS,
+  GENERAL_POOL,
+  GENERALS_PER_FACTION,
 } from "@xpoch/shared";
 import { generateMap } from "./map-generator";
 
@@ -34,16 +37,33 @@ export interface FactionConfig {
 
 // === Helpers ===
 
-let unitCounter = 0;
+let armyCounter = 0;
+let cityCounter = 0;
 
-function nextUnitId(factionId: FactionId): string {
-  unitCounter += 1;
-  return `${factionId}-unit-${unitCounter}`;
+/** Reset counters (useful for deterministic tests) */
+export function _resetCounters(): void {
+  armyCounter = 0;
+  cityCounter = 0;
 }
 
-/** Reset counter (useful for deterministic tests) */
-export function _resetUnitCounter(): void {
-  unitCounter = 0;
+function nextArmyId(factionId: FactionId): ArmyId {
+  armyCounter += 1;
+  return `${factionId}-army-${armyCounter}`;
+}
+
+function nextCityId(factionId: FactionId): CityId {
+  cityCounter += 1;
+  return `${factionId}-city-${cityCounter}`;
+}
+
+function createRng(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function pickSpawnPositions(
@@ -59,27 +79,19 @@ function pickSpawnPositions(
   return Array.from({ length: count }, (_, i) => ring[(i * step) % ring.length]);
 }
 
-function createUnit(
-  factionId: FactionId,
-  type: Unit["type"],
-  coord: HexCoord,
-): Unit {
-  const stats = UNIT_STATS[type];
-  return {
-    id: nextUnitId(factionId),
-    factionId,
-    type,
-    coord,
-    strength: stats.strength,
-    maxStrength: stats.strength,
-    movement: stats.movement,
-    maxMovement: stats.movement,
-    upgraded: false,
-  };
-}
-
-function makeCityId(factionId: FactionId, index: number): CityId {
-  return `${factionId}-city-${index}`;
+/**
+ * Shuffle an array using Fisher-Yates with the provided RNG.
+ * Returns a new array (does not mutate).
+ */
+function shuffle<T>(arr: readonly T[], rng: () => number): T[] {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = result[i];
+    result[i] = result[j];
+    result[j] = tmp;
+  }
+  return result;
 }
 
 // === State creation ===
@@ -89,48 +101,61 @@ export function createInitialState(
   seed: number,
   factionConfigs: readonly FactionConfig[],
 ): GameState {
-  _resetUnitCounter();
+  _resetCounters();
 
+  const rng = createRng(seed + 9999); // offset from map seed
   const baseTiles = generateMap(mapRadius, seed);
   const tiles = new Map(baseTiles);
   const factions = new Map<FactionId, Faction>();
-  const units = new Map<string, Unit>();
+  const armies = new Map<ArmyId, Army>();
+  const generals = new Map<GeneralId, General>();
   const cities = new Map<CityId, City>();
   const spawnCoords = pickSpawnPositions(mapRadius, factionConfigs.length);
+
+  // Shuffle general pool and assign GENERALS_PER_FACTION to each faction (no duplicates)
+  const shuffledGenerals = shuffle(GENERAL_POOL, rng);
+  let generalIndex = 0;
 
   for (let i = 0; i < factionConfigs.length; i++) {
     const cfg = factionConfigs[i];
     const spawn = spawnCoords[i];
 
-    // Create faction
-    factions.set(cfg.id, {
-      id: cfg.id,
-      name: cfg.name,
-      modelProvider: cfg.modelProvider,
-      color: cfg.color,
-      gold: STARTING_GOLD,
-      food: STARTING_FOOD,
-      storedFood: 0,
-      research: 0,
-      techs: [...STARTING_TECHS],
-      alive: true,
-      controlledResources: [],
-    });
+    // Assign generals
+    const factionGeneralDefs = shuffledGenerals.slice(
+      generalIndex,
+      generalIndex + GENERALS_PER_FACTION,
+    );
+    generalIndex += GENERALS_PER_FACTION;
+
+    for (const genDef of factionGeneralDefs) {
+      const general: General = {
+        id: genDef.id,
+        defId: genDef.id,
+        factionId: cfg.id,
+        name: genDef.name,
+        level: 1,
+        exp: 0,
+        alive: true,
+        respawnTick: null,
+      };
+      generals.set(general.id, general);
+    }
 
     // Create capital city
-    const cityId = makeCityId(cfg.id, 0);
+    const cityId = nextCityId(cfg.id);
     cities.set(cityId, {
       id: cityId,
       factionId: cfg.id,
       name: `${cfg.name} Capital`,
       coord: spawn,
       isCapital: true,
-      hasWalls: false,
-      production: 0,
-      currentProject: null,
+      level: 1,
+      walls: 0,
+      garrison: { ...STARTING_GARRISON },
+      trainingQueue: null,
     });
 
-    // Ensure city center tile is land (plains) and assign to faction + city
+    // Ensure city center tile is land and assign to faction + city
     const spawnKey = hexKey(spawn);
     const existingCenter = tiles.get(spawnKey);
     if (existingCenter) {
@@ -139,11 +164,10 @@ export function createInitialState(
         terrain: existingCenter.terrain === "water" ? "plains" : existingCenter.terrain,
         owner: cfg.id,
         cityId,
-        isCityOutskirt: null,
       });
     }
 
-    // Mark 6 surrounding tiles as city outskirts (owned by faction)
+    // Mark 6 surrounding tiles as owned by faction (initial territory)
     const neighbors = hexNeighbors(spawn);
     for (const nb of neighbors) {
       const nbKey = hexKey(nb);
@@ -153,43 +177,56 @@ export function createInitialState(
           ...nbTile,
           terrain: nbTile.terrain === "water" ? "plains" : nbTile.terrain,
           owner: cfg.id,
-          isCityOutskirt: cityId,
         });
       }
     }
 
-    // Place starting units: 2 infantry + 1 scout near the capital
-    const landNeighbors = neighbors
-      .filter((nb) => tiles.get(hexKey(nb)) !== undefined)
-      .slice(0, 3);
-
-    const startingTypes: Unit["type"][] = ["infantry", "infantry", "scout"];
-    for (let u = 0; u < startingTypes.length; u++) {
-      const coord = landNeighbors[u % landNeighbors.length];
-      const unit = createUnit(cfg.id, startingTypes[u], coord);
-      units.set(unit.id, unit);
+    // Count initial territory (city center + up to 6 neighbors)
+    let territoryCount = 1; // city center
+    for (const nb of neighbors) {
+      if (tiles.has(hexKey(nb))) {
+        territoryCount += 1;
+      }
     }
+
+    // Create 1 army led by first general near capital
+    const firstGeneral = factionGeneralDefs[0];
+    const landNeighbors = neighbors.filter((nb) => tiles.has(hexKey(nb)));
+    const armyCoord = landNeighbors.length > 0 ? landNeighbors[0] : spawn;
+
+    const armyId = nextArmyId(cfg.id);
+    armies.set(armyId, {
+      id: armyId,
+      factionId: cfg.id,
+      generalId: firstGeneral.id,
+      troops: { ...STARTING_ARMY_TROOPS },
+      coord: armyCoord,
+      target: null,
+      state: "idle",
+    });
+
+    // Create faction
+    factions.set(cfg.id, {
+      id: cfg.id,
+      name: cfg.name,
+      modelProvider: cfg.modelProvider,
+      color: cfg.color,
+      resources: { ...STARTING_RESOURCES },
+      techs: [],
+      alive: true,
+      territoryCount,
+    });
   }
 
   const diplomacy: DiplomacyState = { relations: new Map() };
 
-  const wonders = WONDER_DEFS.map((def) => ({
-    id: def.id,
-    name: def.name,
-    era: def.era,
-    cost: def.cost,
-    effect: def.effect,
-    builtBy: null,
-    cityId: null,
-  }));
-
   return {
     tick: 0,
     tiles,
-    units,
+    armies,
+    generals,
     cities,
     factions,
-    wonders,
     diplomacy,
     log: [],
     winner: null,
@@ -206,15 +243,15 @@ export function getTile(
   return state.tiles.get(hexKey(coord));
 }
 
-export function getUnitsAt(
+export function getArmiesAt(
   state: GameState,
   coord: HexCoord,
-): Unit[] {
+): Army[] {
   const key = hexKey(coord);
-  const results: Unit[] = [];
-  for (const unit of state.units.values()) {
-    if (hexKey(unit.coord) === key) {
-      results.push(unit);
+  const results: Army[] = [];
+  for (const army of state.armies.values()) {
+    if (hexKey(army.coord) === key) {
+      results.push(army);
     }
   }
   return results;
@@ -245,11 +282,53 @@ export function getFactionCities(
   return results;
 }
 
+export function getFactionArmies(
+  state: GameState,
+  factionId: FactionId,
+): Army[] {
+  const results: Army[] = [];
+  for (const army of state.armies.values()) {
+    if (army.factionId === factionId) {
+      results.push(army);
+    }
+  }
+  return results;
+}
+
+export function getFactionGenerals(
+  state: GameState,
+  factionId: FactionId,
+): General[] {
+  const results: General[] = [];
+  for (const general of state.generals.values()) {
+    if (general.factionId === factionId) {
+      results.push(general);
+    }
+  }
+  return results;
+}
+
 export function isFactionAlive(
   state: GameState,
   factionId: FactionId,
 ): boolean {
   return getFactionCities(state, factionId).length > 0;
+}
+
+export function getAvailableGenerals(
+  state: GameState,
+  factionId: FactionId,
+): General[] {
+  const leadingGeneralIds = new Set<GeneralId>();
+  for (const army of state.armies.values()) {
+    if (army.factionId === factionId) {
+      leadingGeneralIds.add(army.generalId);
+    }
+  }
+
+  return getFactionGenerals(state, factionId).filter(
+    (g) => g.alive && g.respawnTick === null && !leadingGeneralIds.has(g.id),
+  );
 }
 
 // === Immutable state updaters ===
@@ -269,29 +348,29 @@ export function setTile(
   return { ...state, tiles: newTiles };
 }
 
-export function addUnit(state: GameState, unit: Unit): GameState {
-  const newUnits = new Map(state.units);
-  newUnits.set(unit.id, unit);
-  return { ...state, units: newUnits };
+export function addArmy(state: GameState, army: Army): GameState {
+  const newArmies = new Map(state.armies);
+  newArmies.set(army.id, army);
+  return { ...state, armies: newArmies };
 }
 
-export function removeUnit(state: GameState, unitId: string): GameState {
-  const newUnits = new Map(state.units);
-  newUnits.delete(unitId);
-  return { ...state, units: newUnits };
+export function removeArmy(state: GameState, armyId: ArmyId): GameState {
+  const newArmies = new Map(state.armies);
+  newArmies.delete(armyId);
+  return { ...state, armies: newArmies };
 }
 
-export function updateUnit(
+export function updateArmy(
   state: GameState,
-  unitId: string,
-  updates: Partial<Unit>,
+  armyId: ArmyId,
+  updates: Partial<Army>,
 ): GameState {
-  const unit = state.units.get(unitId);
-  if (!unit) return state;
+  const army = state.armies.get(armyId);
+  if (!army) return state;
 
-  const newUnits = new Map(state.units);
-  newUnits.set(unitId, { ...unit, ...updates });
-  return { ...state, units: newUnits };
+  const newArmies = new Map(state.armies);
+  newArmies.set(armyId, { ...army, ...updates });
+  return { ...state, armies: newArmies };
 }
 
 export function addCity(state: GameState, city: City): GameState {
@@ -332,11 +411,24 @@ export function updateFaction(
   return { ...state, factions: newFactions };
 }
 
+export function updateGeneral(
+  state: GameState,
+  generalId: GeneralId,
+  updates: Partial<General>,
+): GameState {
+  const general = state.generals.get(generalId);
+  if (!general) return state;
+
+  const newGenerals = new Map(state.generals);
+  newGenerals.set(generalId, { ...general, ...updates });
+  return { ...state, generals: newGenerals };
+}
+
 export function addLogEntry(
   state: GameState,
   message: string,
   category: LogEntry["category"],
-  involvedFactions: FactionId[],
+  involvedFactions: readonly FactionId[],
 ): GameState {
   const entry: LogEntry = {
     tick: state.tick,

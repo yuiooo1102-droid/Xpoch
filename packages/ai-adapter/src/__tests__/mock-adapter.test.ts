@@ -14,19 +14,19 @@ describe("MockAdapter", () => {
     const decision: TurnDecision = await adapter.decideActions(state, "f1");
 
     expect(decision.factionId).toBe("f1");
-    expect(Array.isArray(decision.military)).toBe(true);
+    expect(Array.isArray(decision.armies)).toBe(true);
     expect(Array.isArray(decision.cities)).toBe(true);
     expect(Array.isArray(decision.diplomacy)).toBe(true);
   });
 
-  it("produces military orders for owned units", async () => {
+  it("produces army orders for owned armies", async () => {
     const adapter = new MockAdapter();
     const decision = await adapter.decideActions(state, "f1");
 
-    expect(decision.military.length).toBeGreaterThan(0);
-    for (const order of decision.military) {
-      expect(order.unitId).toBeDefined();
-      expect(["move", "attack", "fortify", "disband"]).toContain(order.action);
+    expect(decision.armies.length).toBeGreaterThan(0);
+    for (const order of decision.armies) {
+      expect(order.generalId).toBeDefined();
+      expect(["march", "attack", "retreat", "garrison", "idle"]).toContain(order.action);
     }
   });
 
@@ -37,7 +37,7 @@ describe("MockAdapter", () => {
     expect(decision.cities.length).toBeGreaterThan(0);
     for (const order of decision.cities) {
       expect(order.cityId).toBeDefined();
-      expect(["train", "build", "rush", "idle"]).toContain(order.action);
+      expect(["train", "upgrade_walls", "upgrade_city", "idle"]).toContain(order.action);
     }
   });
 

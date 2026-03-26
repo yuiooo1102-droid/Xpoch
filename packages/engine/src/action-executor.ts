@@ -2,36 +2,57 @@ import type {
   GameState,
   FactionId,
   TurnDecision,
-  MilitaryOrder,
+  ArmyOrder,
   CityOrder,
+  BuildOrder,
   DiplomacyOrder,
   HexCoord,
-  Unit,
   DiplomaticStatus,
+  Resources,
+  Troops,
+  TroopType,
 } from "@xpoch/shared";
-import { hexKey, UNIT_STATS, BUILDING_STATS, RUSH_GOLD_MULTIPLIER, TERRAIN_DEFENSE_BONUS, CITY_DEFENSE_BONUS, CAPITAL_DEFENSE_BONUS, WALLS_DEFENSE_BONUS } from "@xpoch/shared";
+import {
+  hexKey,
+  hexDistance,
+  hexNeighbors,
+  TROOP_STATS,
+  BUILDING_DEFS,
+  CITY_UPGRADE_COST,
+  WALL_UPGRADE_COST,
+  MAX_CITY_LEVEL,
+  MAX_WALLS,
+  TERRAIN_DEFENSE,
+  CITY_DEFENSE,
+  CAPITAL_DEFENSE,
+  WALL_DEFENSE_PER_LEVEL,
+  GENERAL_POOL,
+  TERRAIN_MOVEMENT_COST,
+} from "@xpoch/shared";
 import {
   updateFaction,
   addLogEntry,
-  updateUnit,
-  removeUnit,
-  addUnit,
-  getUnitsAt,
+  updateArmy,
+  removeArmy,
+  updateCity,
+  setTile,
+  getFactionCities,
   getCityAt,
 } from "./game-state";
 import {
-  validateMilitaryOrder,
+  validateArmyOrder,
   validateCityOrder,
+  validateBuildOrder,
   validateDiplomacyOrder,
 } from "./action-validator";
-import { resolveCombat } from "./combat-resolver";
 import { researchTech } from "./tech-tree";
+import { resolveBattle } from "./combat-resolver";
 
 // === Main entry point ===
 
 /**
  * Execute all actions in a TurnDecision for one faction.
- * Order: research → diplomacy → city orders → military orders
+ * Order: research -> diplomacy -> build orders -> city orders -> army orders
  */
 export function executeTurnDecision(
   state: GameState,
@@ -57,187 +78,324 @@ export function executeTurnDecision(
     s = executeDiplomacyOrder(s, order, factionId);
   }
 
-  // 3. City orders
+  // 3. Build orders
+  for (const order of decision.build) {
+    s = executeBuildOrder(s, order, factionId);
+  }
+
+  // 4. City orders
   for (const order of decision.cities) {
     s = executeCityOrder(s, order, factionId);
   }
 
-  // 4. Military orders
-  for (const order of decision.military) {
-    s = executeMilitaryOrder(s, order, factionId);
+  // 5. Army orders
+  for (const order of decision.armies) {
+    s = executeArmyOrder(s, order, factionId);
   }
 
   return s;
 }
 
-// === Military execution ===
+// === Army execution ===
 
-function executeMilitaryOrder(
+function executeArmyOrder(
   state: GameState,
-  order: MilitaryOrder,
+  order: ArmyOrder,
   factionId: FactionId,
 ): GameState {
-  // Skip orders for units that were killed earlier this tick (stale references)
-  const unit = state.units.get(order.unitId);
-  if (!unit) return state;
-
-  const validation = validateMilitaryOrder(state, order, factionId);
+  const validation = validateArmyOrder(state, order, factionId);
   if (!validation.valid) {
-    // Stale attack target: enemy moved away — fall back to move if hex is empty
-    if (
-      order.action === "attack" &&
-      validation.reason === "No enemy units or city at attack target" &&
-      order.to
-    ) {
-      return executeMoveOrAttack(state, { ...order, action: "move" }, factionId);
-    }
-
     return addLogEntry(
       state,
-      `[${factionId}] Invalid military order: ${validation.reason}`,
+      `[${factionId}] Invalid army order: ${validation.reason}`,
       "system",
       [factionId],
     );
   }
 
+  const army = [...state.armies.values()].find(
+    (a) => a.generalId === order.generalId && a.factionId === factionId,
+  );
+
   switch (order.action) {
-    case "move":
-      return executeMoveOrAttack(state, order, factionId);
+    case "march":
+      return executeMarch(state, army!, order);
+
     case "attack":
-      return executeMoveOrAttack(state, order, factionId);
-    case "fortify":
-      return executeFortify(state, order);
-    case "disband":
-      return executeDisband(state, order, factionId);
+      return executeAttack(state, army!, order, factionId);
+
+    case "retreat":
+      return executeRetreat(state, army!, factionId);
+
+    case "garrison":
+      return executeGarrison(state, army!, factionId);
+
+    case "idle":
+      return state;
+
     default:
       return state;
   }
 }
 
-function executeMoveOrAttack(
+function executeMarch(
   state: GameState,
-  order: MilitaryOrder,
-  factionId: FactionId,
+  army: { readonly id: string; readonly coord: HexCoord },
+  order: ArmyOrder,
 ): GameState {
-  const unit = state.units.get(order.unitId);
-  if (!unit || !order.to) return state;
+  if (!order.target) return state;
 
-  const targetKey = hexKey(order.to);
+  // Set army marching toward target
+  let s = updateArmy(state, army.id, {
+    target: order.target,
+    state: "marching",
+  });
 
-  // Check for enemy units at target
-  const enemyUnits = getEnemyUnitsAt(state, order.to, factionId);
-
-  if (enemyUnits.length > 0) {
-    return executeAttackCombat(state, unit, order.to, factionId);
+  // Move one step toward target (simplified: find best neighbor)
+  const currentArmy = s.armies.get(army.id)!;
+  const step = findStepToward(s, currentArmy.coord, order.target);
+  if (step) {
+    s = updateArmy(s, army.id, { coord: step });
   }
 
-  // Check for enemy city (undefended)
-  const cityAtTarget = getCityAt(state, order.to);
-  if (cityAtTarget && cityAtTarget.factionId !== factionId) {
-    return executeCityCapture(state, unit, order.to, factionId);
-  }
-
-  // Simple move
-  const s = updateUnit(state, order.unitId, { coord: order.to });
-  return addLogEntry(
-    s,
-    `${factionId} moved ${unit.type} to ${targetKey}`,
-    "combat",
-    [factionId],
-  );
+  return s;
 }
 
-function executeAttackCombat(
+function executeAttack(
   state: GameState,
-  attacker: Unit,
-  target: HexCoord,
+  army: { readonly id: string; readonly generalId: string; readonly factionId: string; readonly troops: Troops; readonly coord: HexCoord },
+  order: ArmyOrder,
   factionId: FactionId,
 ): GameState {
-  const targetKey = hexKey(target);
-  const targetTile = state.tiles.get(targetKey);
-  const terrainBonus = targetTile ? TERRAIN_DEFENSE_BONUS[targetTile.terrain] : 0;
+  if (!order.target) return state;
 
-  // Calculate city defense bonus
-  const cityAtTarget = getCityAt(state, target);
-  let cityBonus = 0;
-  if (cityAtTarget && cityAtTarget.factionId !== factionId) {
-    cityBonus = cityAtTarget.isCapital ? CAPITAL_DEFENSE_BONUS : CITY_DEFENSE_BONUS;
-    if (cityAtTarget.hasWalls) {
-      cityBonus += WALLS_DEFENSE_BONUS;
+  const targetKey = hexKey(order.target);
+  const targetTile = state.tiles.get(targetKey);
+  const terrainDefense = targetTile ? TERRAIN_DEFENSE[targetTile.terrain] : 0;
+
+  // Find attacker general def
+  const attackerGeneral = state.generals.get(army.generalId);
+  const attackerGenDef = attackerGeneral
+    ? GENERAL_POOL.find((g) => g.id === attackerGeneral.defId) ?? null
+    : null;
+
+  // Find enemy armies at target
+  const enemyArmies = [...state.armies.values()].filter(
+    (a) => hexKey(a.coord) === targetKey && a.factionId !== factionId,
+  );
+
+  // Find enemy city at target
+  const cityAtTarget = getCityAt(state, order.target);
+  const enemyCityDefense =
+    cityAtTarget && cityAtTarget.factionId !== factionId
+      ? (cityAtTarget.isCapital ? CAPITAL_DEFENSE : CITY_DEFENSE) +
+        cityAtTarget.walls * WALL_DEFENSE_PER_LEVEL
+      : 0;
+
+  // Combine all defender troops
+  let defenderTroops: Troops = { infantry: 0, cavalry: 0, archer: 0 };
+  let defenderGeneralDef = null;
+
+  for (const enemyArmy of enemyArmies) {
+    defenderTroops = {
+      infantry: defenderTroops.infantry + enemyArmy.troops.infantry,
+      cavalry: defenderTroops.cavalry + enemyArmy.troops.cavalry,
+      archer: defenderTroops.archer + enemyArmy.troops.archer,
+    };
+    // Use first enemy general
+    if (!defenderGeneralDef) {
+      const gen = state.generals.get(enemyArmy.generalId);
+      defenderGeneralDef = gen
+        ? GENERAL_POOL.find((g) => g.id === gen.defId) ?? null
+        : null;
     }
   }
 
-  const enemyUnits = getEnemyUnitsAt(state, target, factionId);
+  // Add city garrison to defenders
+  const garrison: Troops | undefined =
+    cityAtTarget && cityAtTarget.factionId !== factionId
+      ? cityAtTarget.garrison
+      : undefined;
 
-  // Gather ALL friendly units at the attacker's hex to join the assault
-  const allAttackers = getFriendlyUnitsAt(state, attacker.coord, factionId);
-
-  const combatResult = resolveCombat(
-    allAttackers,
-    enemyUnits,
-    terrainBonus,
-    cityBonus,
+  const battleResult = resolveBattle(
+    { troops: army.troops, general: attackerGenDef },
+    { troops: defenderTroops, general: defenderGeneralDef, garrison },
+    terrainDefense,
+    enemyCityDefense,
   );
 
   let s = state;
 
-  // Remove dead attackers
-  for (const dead of combatResult.attackerLosses) {
-    s = removeUnit(s, dead.id);
+  // Update attacker army
+  s = updateArmy(s, army.id, {
+    troops: battleResult.attackerRemaining,
+    state: "battling",
+  });
+
+  // Update or remove defender armies
+  for (const enemyArmy of enemyArmies) {
+    // Distribute losses proportionally
+    const enemyTotal = defenderTroops.infantry + defenderTroops.cavalry + defenderTroops.archer;
+    if (enemyTotal === 0) continue;
+
+    const ratio = {
+      infantry: enemyArmy.troops.infantry / Math.max(1, defenderTroops.infantry || 1),
+      cavalry: enemyArmy.troops.cavalry / Math.max(1, defenderTroops.cavalry || 1),
+      archer: enemyArmy.troops.archer / Math.max(1, defenderTroops.archer || 1),
+    };
+
+    const remaining: Troops = {
+      infantry: Math.max(0, Math.round(battleResult.defenderRemaining.infantry * (defenderTroops.infantry > 0 ? enemyArmy.troops.infantry / defenderTroops.infantry : 0))),
+      cavalry: Math.max(0, Math.round(battleResult.defenderRemaining.cavalry * (defenderTroops.cavalry > 0 ? enemyArmy.troops.cavalry / defenderTroops.cavalry : 0))),
+      archer: Math.max(0, Math.round(battleResult.defenderRemaining.archer * (defenderTroops.archer > 0 ? enemyArmy.troops.archer / defenderTroops.archer : 0))),
+    };
+
+    const total = remaining.infantry + remaining.cavalry + remaining.archer;
+    if (total === 0) {
+      s = removeArmy(s, enemyArmy.id);
+    } else {
+      s = updateArmy(s, enemyArmy.id, { troops: remaining });
+    }
   }
 
-  // Remove dead defenders
-  for (const dead of combatResult.defenderLosses) {
-    s = removeUnit(s, dead.id);
-  }
+  // Update city garrison if city was involved
+  if (garrison && cityAtTarget && battleResult.attackerWins) {
+    // Attacker wins: capture city
+    s = captureCity(s, cityAtTarget.id, factionId);
 
-  if (combatResult.attackerWins) {
-    // Move surviving attacker to target
-    for (const survivor of combatResult.survivingAttackers) {
-      s = updateUnit(s, survivor.id, { coord: target });
-    }
+    // Move attacker to target hex
+    s = updateArmy(s, army.id, {
+      coord: order.target,
+      state: "idle",
+      target: null,
+    });
 
-    // Capture city if present
-    if (cityAtTarget && cityAtTarget.factionId !== factionId) {
-      s = captureCity(s, cityAtTarget.id, factionId);
-    }
+    s = addLogEntry(
+      s,
+      `${factionId} captured ${cityAtTarget.name}!`,
+      "combat",
+      [factionId, cityAtTarget.factionId],
+    );
+  } else if (garrison && cityAtTarget && !battleResult.attackerWins) {
+    // Defender wins: update garrison
+    const garrisonRemaining: Troops = {
+      infantry: Math.max(0, battleResult.defenderRemaining.infantry - defenderTroops.infantry),
+      cavalry: Math.max(0, battleResult.defenderRemaining.cavalry - defenderTroops.cavalry),
+      archer: Math.max(0, battleResult.defenderRemaining.archer - defenderTroops.archer),
+    };
+    s = updateCity(s, cityAtTarget.id, {
+      garrison: {
+        infantry: Math.max(0, garrisonRemaining.infantry),
+        cavalry: Math.max(0, garrisonRemaining.cavalry),
+        archer: Math.max(0, garrisonRemaining.archer),
+      },
+    });
+
+    s = addLogEntry(
+      s,
+      `${factionId} failed to capture ${cityAtTarget.name}.`,
+      "combat",
+      [factionId, cityAtTarget.factionId],
+    );
+  } else if (battleResult.attackerWins) {
+    // Field battle won: attacker moves to target
+    s = updateArmy(s, army.id, {
+      coord: order.target,
+      state: "idle",
+      target: null,
+    });
 
     s = addLogEntry(
       s,
       `${factionId} won battle at ${targetKey}`,
       "combat",
-      [factionId, enemyUnits[0]?.factionId].filter(Boolean) as FactionId[],
+      [factionId, ...(enemyArmies.length > 0 ? [enemyArmies[0].factionId] : [])],
     );
   } else {
     s = addLogEntry(
       s,
       `${factionId} lost battle at ${targetKey}`,
       "combat",
-      [factionId, enemyUnits[0]?.factionId].filter(Boolean) as FactionId[],
+      [factionId, ...(enemyArmies.length > 0 ? [enemyArmies[0].factionId] : [])],
     );
+  }
+
+  // Remove attacker army if no troops left
+  const updatedAttacker = s.armies.get(army.id);
+  if (updatedAttacker) {
+    const totalRemaining =
+      updatedAttacker.troops.infantry +
+      updatedAttacker.troops.cavalry +
+      updatedAttacker.troops.archer;
+    if (totalRemaining === 0) {
+      s = removeArmy(s, army.id);
+    }
   }
 
   return s;
 }
 
-function executeCityCapture(
+function executeRetreat(
   state: GameState,
-  unit: Unit,
-  target: HexCoord,
+  army: { readonly id: string; readonly coord: HexCoord; readonly factionId: string },
   factionId: FactionId,
 ): GameState {
-  const cityAtTarget = getCityAt(state, target);
-  if (!cityAtTarget) return state;
+  // Find nearest own city
+  const ownCities = getFactionCities(state, factionId);
+  if (ownCities.length === 0) return state;
 
-  let s = updateUnit(state, unit.id, { coord: target });
-  s = captureCity(s, cityAtTarget.id, factionId);
+  let nearestCity = ownCities[0];
+  let nearestDist = hexDistance(army.coord, nearestCity.coord);
 
-  return addLogEntry(
+  for (const city of ownCities) {
+    const dist = hexDistance(army.coord, city.coord);
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearestCity = city;
+    }
+  }
+
+  const step = findStepToward(state, army.coord, nearestCity.coord);
+  if (step) {
+    return updateArmy(state, army.id, {
+      coord: step,
+      target: nearestCity.coord,
+      state: "returning",
+    });
+  }
+
+  return state;
+}
+
+function executeGarrison(
+  state: GameState,
+  army: { readonly id: string; readonly troops: Troops; readonly coord: HexCoord; readonly generalId: string },
+  factionId: FactionId,
+): GameState {
+  // Find city at army location
+  const city = getCityAt(state, army.coord);
+  if (!city || city.factionId !== factionId) return state;
+
+  // Merge army troops into garrison
+  const newGarrison: Troops = {
+    infantry: city.garrison.infantry + army.troops.infantry,
+    cavalry: city.garrison.cavalry + army.troops.cavalry,
+    archer: city.garrison.archer + army.troops.archer,
+  };
+
+  let s = updateCity(state, city.id, { garrison: newGarrison });
+
+  // Remove the army (general becomes free)
+  s = removeArmy(s, army.id);
+
+  s = addLogEntry(
     s,
-    `${factionId} captured ${cityAtTarget.name}`,
-    "combat",
-    [factionId, cityAtTarget.factionId],
+    `Army garrisoned at ${city.name}, freeing general.`,
+    "city",
+    [factionId],
   );
+
+  return s;
 }
 
 function captureCity(
@@ -248,53 +406,51 @@ function captureCity(
   const city = state.cities.get(cityId);
   if (!city) return state;
 
-  // Update city ownership
-  const newCities = new Map(state.cities);
-  newCities.set(cityId, {
-    ...city,
+  const oldOwner = city.factionId;
+
+  // Update city ownership, reset garrison and training
+  let s = updateCity(state, cityId, {
     factionId: newOwner,
     isCapital: false,
-    currentProject: null,
+    garrison: { infantry: 0, cavalry: 0, archer: 0 },
+    trainingQueue: null,
   });
 
-  let s: GameState = { ...state, cities: newCities };
+  // Update tile ownership for city center
+  s = setTile(s, city.coord, { owner: newOwner });
 
-  // Update all outskirt tiles to reflect new ownership
-  const newTiles = new Map(s.tiles);
-  for (const [key, tile] of newTiles) {
-    if (tile.isCityOutskirt === cityId || tile.cityId === cityId) {
-      newTiles.set(key, { ...tile, owner: newOwner });
+  // Update surrounding tiles
+  const neighbors = hexNeighbors(city.coord);
+  for (const nb of neighbors) {
+    const tile = s.tiles.get(hexKey(nb));
+    if (tile && tile.owner === oldOwner) {
+      s = setTile(s, nb, { owner: newOwner });
     }
   }
 
-  return { ...s, tiles: newTiles };
+  // Update territory counts
+  const newOwnerFaction = s.factions.get(newOwner);
+  const oldOwnerFaction = s.factions.get(oldOwner);
+  const capturedTiles = 1 + neighbors.filter((nb) => {
+    const t = s.tiles.get(hexKey(nb));
+    return t && t.owner === newOwner;
+  }).length;
+
+  if (newOwnerFaction) {
+    s = updateFaction(s, newOwner, {
+      territoryCount: newOwnerFaction.territoryCount + capturedTiles,
+    });
+  }
+  if (oldOwnerFaction) {
+    s = updateFaction(s, oldOwner, {
+      territoryCount: Math.max(0, oldOwnerFaction.territoryCount - capturedTiles),
+    });
+  }
+
+  return s;
 }
 
-function executeFortify(state: GameState, order: MilitaryOrder): GameState {
-  // Fortifying restores some strength (simplified: set to max)
-  const unit = state.units.get(order.unitId);
-  if (!unit) return state;
-  return updateUnit(state, order.unitId, { strength: unit.maxStrength });
-}
-
-function executeDisband(
-  state: GameState,
-  order: MilitaryOrder,
-  factionId: FactionId,
-): GameState {
-  const unit = state.units.get(order.unitId);
-  if (!unit) return state;
-
-  const s = removeUnit(state, order.unitId);
-  return addLogEntry(
-    s,
-    `${factionId} disbanded ${unit.type}`,
-    "combat",
-    [factionId],
-  );
-}
-
-// === City execution ===
+// === City order execution ===
 
 function executeCityOrder(
   state: GameState,
@@ -313,54 +469,64 @@ function executeCityOrder(
 
   switch (order.action) {
     case "train":
-      return executeTrain(state, order, factionId);
-    case "build":
-      return executeBuild(state, order, factionId);
-    case "rush":
-      return executeRush(state, order, factionId);
+      return executeTrainTroops(state, order, factionId);
+
+    case "upgrade_walls":
+      return executeUpgradeWalls(state, order, factionId);
+
+    case "upgrade_city":
+      return executeUpgradeCity(state, order, factionId);
+
     case "idle":
       return state;
+
     default:
       return state;
   }
 }
 
-function executeTrain(
+function executeTrainTroops(
   state: GameState,
   order: CityOrder,
   factionId: FactionId,
 ): GameState {
   const city = state.cities.get(order.cityId);
-  if (!city || !order.target) return state;
+  if (!city || !order.troopType) return state;
 
-  const unitType = order.target as Unit["type"];
-  const stats = UNIT_STATS[unitType];
-  if (!stats) return state;
+  const stats = TROOP_STATS[order.troopType];
+  const amount = order.amount ?? 100;
+  const batchCount = amount / 100;
 
-  const faction = state.factions.get(factionId);
-  if (!faction) return state;
-
-  // Deduct gold and create unit at city
-  let s = updateFaction(state, factionId, {
-    gold: faction.gold - stats.cost,
-  });
-
-  const newUnit: Unit = {
-    id: `${factionId}-unit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    factionId,
-    type: unitType,
-    coord: city.coord,
-    strength: stats.strength,
-    maxStrength: stats.strength,
-    movement: stats.movement,
-    maxMovement: stats.movement,
-    upgraded: false,
+  const cost: Resources = {
+    gold: stats.trainCost.gold * batchCount,
+    food: stats.trainCost.food * batchCount,
+    wood: stats.trainCost.wood * batchCount,
+    iron: stats.trainCost.iron * batchCount,
   };
 
-  s = addUnit(s, newUnit);
+  // Deduct resources
+  const faction = state.factions.get(factionId)!;
+  let s = updateFaction(state, factionId, {
+    resources: {
+      gold: faction.resources.gold - cost.gold,
+      food: faction.resources.food - cost.food,
+      wood: faction.resources.wood - cost.wood,
+      iron: faction.resources.iron - cost.iron,
+    },
+  });
+
+  // Set training queue
+  s = updateCity(s, order.cityId, {
+    trainingQueue: {
+      troopType: order.troopType,
+      amount,
+      ticksRemaining: Math.ceil(stats.trainTicks * batchCount),
+    },
+  });
+
   s = addLogEntry(
     s,
-    `${factionId} trained ${unitType} at ${city.name}`,
+    `${city.name} started training ${amount} ${order.troopType}.`,
     "city",
     [factionId],
   );
@@ -368,69 +534,101 @@ function executeTrain(
   return s;
 }
 
-function executeBuild(
+function executeUpgradeWalls(
   state: GameState,
   order: CityOrder,
   factionId: FactionId,
 ): GameState {
-  const city = state.cities.get(order.cityId);
-  if (!city || !order.target) return state;
+  const city = state.cities.get(order.cityId)!;
+  const faction = state.factions.get(factionId)!;
 
-  // Start a production project using BUILDING_STATS
-  const bStats = BUILDING_STATS[order.target as keyof typeof BUILDING_STATS];
-  const cost = bStats?.cost ?? 10;
-
-  const newCities = new Map(state.cities);
-  newCities.set(order.cityId, {
-    ...city,
-    currentProject: {
-      type: "building",
-      target: order.target,
-      invested: 0,
-      cost,
+  let s = updateFaction(state, factionId, {
+    resources: {
+      gold: faction.resources.gold - WALL_UPGRADE_COST.gold,
+      food: faction.resources.food - WALL_UPGRADE_COST.food,
+      wood: faction.resources.wood - WALL_UPGRADE_COST.wood,
+      iron: faction.resources.iron - WALL_UPGRADE_COST.iron,
     },
   });
 
-  const s: GameState = { ...state, cities: newCities };
-  return addLogEntry(
+  s = updateCity(s, order.cityId, { walls: city.walls + 1 });
+
+  s = addLogEntry(
     s,
-    `${factionId} started building ${order.target} at ${city.name}`,
+    `${city.name} upgraded walls to level ${city.walls + 1}.`,
     "city",
     [factionId],
   );
+
+  return s;
 }
 
-function executeRush(
+function executeUpgradeCity(
   state: GameState,
   order: CityOrder,
   factionId: FactionId,
 ): GameState {
-  const city = state.cities.get(order.cityId);
-  if (!city || !city.currentProject) return state;
-
-  const faction = state.factions.get(factionId);
-  if (!faction) return state;
-
-  const remaining = city.currentProject.cost - city.currentProject.invested;
-  const rushCost = remaining * RUSH_GOLD_MULTIPLIER;
+  const city = state.cities.get(order.cityId)!;
+  const faction = state.factions.get(factionId)!;
 
   let s = updateFaction(state, factionId, {
-    gold: faction.gold - rushCost,
+    resources: {
+      gold: faction.resources.gold - CITY_UPGRADE_COST.gold,
+      food: faction.resources.food - CITY_UPGRADE_COST.food,
+      wood: faction.resources.wood - CITY_UPGRADE_COST.wood,
+      iron: faction.resources.iron - CITY_UPGRADE_COST.iron,
+    },
   });
 
-  // Complete the project
-  const newCities = new Map(s.cities);
-  newCities.set(order.cityId, {
-    ...city,
-    currentProject: null,
-    production: 0,
-  });
+  s = updateCity(s, order.cityId, { level: city.level + 1 });
 
-  s = { ...s, cities: newCities };
   s = addLogEntry(
     s,
-    `${factionId} rush-completed ${city.currentProject.target} at ${city.name}`,
+    `${city.name} upgraded to level ${city.level + 1}.`,
     "city",
+    [factionId],
+  );
+
+  return s;
+}
+
+// === Build order execution ===
+
+function executeBuildOrder(
+  state: GameState,
+  order: BuildOrder,
+  factionId: FactionId,
+): GameState {
+  const validation = validateBuildOrder(state, order, factionId);
+  if (!validation.valid) {
+    return addLogEntry(
+      state,
+      `[${factionId}] Invalid build order: ${validation.reason}`,
+      "system",
+      [factionId],
+    );
+  }
+
+  const buildingDef = BUILDING_DEFS[order.building];
+  const faction = state.factions.get(factionId)!;
+
+  // Deduct resources
+  let s = updateFaction(state, factionId, {
+    resources: {
+      gold: faction.resources.gold - buildingDef.cost.gold,
+      food: faction.resources.food - buildingDef.cost.food,
+      wood: faction.resources.wood - buildingDef.cost.wood,
+      iron: faction.resources.iron - buildingDef.cost.iron,
+    },
+  });
+
+  // Place building
+  s = setTile(s, order.hex, { building: order.building });
+
+  s = addLogEntry(
+    s,
+    `${factionId} built ${order.building} at ${hexKey(order.hex)}.`,
+    "economy",
     [factionId],
   );
 
@@ -473,16 +671,8 @@ function executeDiplomacyOrder(
       return setDiplomacy(state, key, "peace", factionId, order.targetFactionId,
         `${factionId} offered PEACE to ${order.targetFactionId}`);
 
-    case "send_gold":
-      return executeSendGold(state, factionId, order.targetFactionId, order.amount ?? 0);
-
-    case "demand_tribute":
-      return addLogEntry(
-        state,
-        `${factionId} demanded tribute from ${order.targetFactionId}`,
-        "diplomacy",
-        [factionId, order.targetFactionId],
-      );
+    case "send_tribute":
+      return executeSendTribute(state, factionId, order.targetFactionId, order.amount ?? 0);
 
     default:
       return state;
@@ -508,7 +698,7 @@ function setDiplomacy(
   return addLogEntry(s, message, "diplomacy", [factionId, targetId]);
 }
 
-function executeSendGold(
+function executeSendTribute(
   state: GameState,
   factionId: FactionId,
   targetId: FactionId,
@@ -518,11 +708,15 @@ function executeSendGold(
   const receiver = state.factions.get(targetId);
   if (!sender || !receiver) return state;
 
-  let s = updateFaction(state, factionId, { gold: sender.gold - amount });
-  s = updateFaction(s, targetId, { gold: receiver.gold + amount });
+  let s = updateFaction(state, factionId, {
+    resources: { ...sender.resources, gold: sender.resources.gold - amount },
+  });
+  s = updateFaction(s, targetId, {
+    resources: { ...receiver.resources, gold: receiver.resources.gold + amount },
+  });
   s = addLogEntry(
     s,
-    `${factionId} sent ${amount} gold to ${targetId}`,
+    `${factionId} sent ${amount} gold tribute to ${targetId}`,
     "diplomacy",
     [factionId, targetId],
   );
@@ -532,32 +726,19 @@ function executeSendGold(
 
 // === Helpers ===
 
-function getEnemyUnitsAt(
+function findStepToward(
   state: GameState,
-  coord: HexCoord,
-  factionId: FactionId,
-): Unit[] {
-  const key = hexKey(coord);
-  const results: Unit[] = [];
-  for (const unit of state.units.values()) {
-    if (hexKey(unit.coord) === key && unit.factionId !== factionId) {
-      results.push(unit);
-    }
-  }
-  return results;
-}
+  from: HexCoord,
+  target: HexCoord,
+): HexCoord | null {
+  const candidates = hexNeighbors(from).filter((n) => {
+    const tile = state.tiles.get(hexKey(n));
+    return tile && tile.terrain !== "water";
+  });
 
-function getFriendlyUnitsAt(
-  state: GameState,
-  coord: HexCoord,
-  factionId: FactionId,
-): Unit[] {
-  const key = hexKey(coord);
-  const results: Unit[] = [];
-  for (const unit of state.units.values()) {
-    if (hexKey(unit.coord) === key && unit.factionId === factionId) {
-      results.push(unit);
-    }
-  }
-  return results;
+  if (candidates.length === 0) return null;
+
+  return candidates.reduce((best, c) =>
+    hexDistance(c, target) < hexDistance(best, target) ? c : best,
+  );
 }

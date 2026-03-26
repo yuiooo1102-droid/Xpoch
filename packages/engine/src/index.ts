@@ -1,5 +1,6 @@
 export * from "./game-state";
 export * from "./map-generator";
+export * from "./territory";
 export * from "./action-validator";
 export * from "./action-executor";
 export * from "./combat-resolver";
@@ -9,3 +10,5 @@ export * from "./economy";
 export * from "./city-manager";
 export * from "./victory";
 export * from "./tech-tree";
+export * from "./general-manager";
+export * from "./march-system";

@@ -1,90 +1,74 @@
-import type { GameState, FactionId, Tile } from "@xpoch/shared";
+import type {
+  GameState,
+  FactionId,
+  Resources,
+  Troops,
+  TroopType,
+} from "@xpoch/shared";
 import {
-  TERRAIN_GOLD,
-  BUILDING_STATS,
-  FOOD_PER_UNIT,
-  MAX_STORED_FOOD,
-  BASE_FOOD_PER_CITY,
-  BASE_RESEARCH_PER_CITY,
+  TERRAIN_INCOME,
+  BUILDING_DEFS,
+  TROOP_STATS,
+  FOOD_PER_100_TROOPS,
 } from "@xpoch/shared";
 import {
   updateFaction,
+  updateCity,
   addLogEntry,
-  updateUnit,
   getFactionCities,
+  getFactionArmies,
 } from "./game-state";
+
+// === Constants ===
+
+const STARVATION_DESERTION_RATE = 0.1; // 10% of troops desert when food < 0
+const TROOP_TYPES: readonly TroopType[] = ["infantry", "cavalry", "archer"];
 
 // === Helpers ===
 
-/**
- * Determine whether a tile is owned by a given faction.
- * A tile is "owned" if:
- *   - tile.owner === factionId, OR
- *   - tile.isCityOutskirt points to a city belonging to that faction, OR
- *   - tile.cityId points to a city belonging to that faction
- */
-function isTileOwnedBy(state: GameState, tile: Tile, factionId: FactionId): boolean {
-  if (tile.owner === factionId) return true;
-
-  if (tile.isCityOutskirt !== null) {
-    const city = state.cities.get(tile.isCityOutskirt);
-    if (city !== undefined && city.factionId === factionId) return true;
-  }
-
-  if (tile.cityId !== null) {
-    const city = state.cities.get(tile.cityId);
-    if (city !== undefined && city.factionId === factionId) return true;
-  }
-
-  return false;
+function totalTroopsCount(troops: Troops): number {
+  return troops.infantry + troops.cavalry + troops.archer;
 }
 
-/**
- * Collect all tiles owned by a faction.
- */
-function getOwnedTiles(state: GameState, factionId: FactionId): readonly Tile[] {
-  const result: Tile[] = [];
-  for (const tile of state.tiles.values()) {
-    if (isTileOwnedBy(state, tile, factionId)) {
-      result.push(tile);
-    }
-  }
-  return result;
+function addPartialResources(a: Resources, b: Partial<Resources>): Resources {
+  return {
+    gold: a.gold + (b.gold ?? 0),
+    food: a.food + (b.food ?? 0),
+    wood: a.wood + (b.wood ?? 0),
+    iron: a.iron + (b.iron ?? 0),
+  };
 }
 
-/**
- * Get IDs of all units belonging to a faction.
- */
-function getFactionUnitIds(state: GameState, factionId: FactionId): readonly string[] {
-  const ids: string[] = [];
-  for (const unit of state.units.values()) {
-    if (unit.factionId === factionId) {
-      ids.push(unit.id);
-    }
-  }
-  return ids;
-}
-
-function hasTech(state: GameState, factionId: FactionId, techId: string): boolean {
-  const faction = state.factions.get(factionId);
-  if (faction === undefined) return false;
-  return faction.techs.includes(techId);
+function applyDesertionToTroops(troops: Troops, rate: number): Troops {
+  return {
+    infantry: Math.max(0, troops.infantry - Math.ceil(troops.infantry * rate)),
+    cavalry: Math.max(0, troops.cavalry - Math.ceil(troops.cavalry * rate)),
+    archer: Math.max(0, troops.archer - Math.ceil(troops.archer * rate)),
+  };
 }
 
 // === Public API ===
 
 /**
- * Calculate total gold income for a faction this tick.
- * Sum of TERRAIN_GOLD for each owned tile + building gold bonuses.
+ * Calculate total resource income for a faction this tick.
+ * Iterates all tiles where tile.owner === factionId,
+ * sums TERRAIN_INCOME[terrain] + building income if building exists.
  */
-export function calculateGoldIncome(state: GameState, factionId: FactionId): number {
-  const tiles = getOwnedTiles(state, factionId);
+export function calculateIncome(
+  state: GameState,
+  factionId: FactionId,
+): Resources {
+  let income: Resources = { gold: 0, food: 0, wood: 0, iron: 0 };
 
-  let income = 0;
-  for (const tile of tiles) {
-    income += TERRAIN_GOLD[tile.terrain];
+  for (const tile of state.tiles.values()) {
+    if (tile.owner !== factionId) continue;
+
+    const terrainIncome = TERRAIN_INCOME[tile.terrain];
+    income = addPartialResources(income, terrainIncome);
+
     if (tile.building !== null) {
-      income += BUILDING_STATS[tile.building].goldBonus;
+      const buildingDef = BUILDING_DEFS[tile.building];
+      income = addPartialResources(income, buildingDef.income);
     }
   }
 
@@ -92,63 +76,42 @@ export function calculateGoldIncome(state: GameState, factionId: FactionId): num
 }
 
 /**
- * Calculate food balance (production - consumption) for a faction.
- * Food production comes from:
- *   - BASE_FOOD_PER_CITY per city (baseline subsistence)
- *   - Plains tiles produce 1 base food; with "agriculture" tech they produce 2
- *   - Buildings with foodBonus (e.g. granary +2)
- * Consumption: each unit costs FOOD_PER_UNIT per tick.
+ * Calculate food upkeep for a faction this tick.
+ * Total troops = sum of all army troops + all city garrison troops.
+ * Food consumed = (totalTroops / 100) * FOOD_PER_100_TROOPS per tick.
  */
-export function calculateFoodBalance(
+export function calculateUpkeep(
   state: GameState,
   factionId: FactionId,
-): { readonly produced: number; readonly consumed: number; readonly balance: number } {
-  const tiles = getOwnedTiles(state, factionId);
-  const hasAgriculture = hasTech(state, factionId, "agriculture");
-  const factionCities = getFactionCities(state, factionId);
+): Resources {
+  let totalTroops = 0;
 
-  let produced = factionCities.length * BASE_FOOD_PER_CITY;
-  for (const tile of tiles) {
-    if (tile.terrain === "plains") {
-      produced += hasAgriculture ? 2 : 1;
-    }
-    if (tile.building !== null) {
-      produced += BUILDING_STATS[tile.building].foodBonus;
+  // Count army troops
+  for (const army of state.armies.values()) {
+    if (army.factionId === factionId) {
+      totalTroops += totalTroopsCount(army.troops);
     }
   }
 
-  const unitIds = getFactionUnitIds(state, factionId);
-  const consumed = unitIds.length * FOOD_PER_UNIT;
-
-  return { produced, consumed, balance: produced - consumed };
-}
-
-/**
- * Calculate research points generated this tick for a faction.
- * BASE_RESEARCH_PER_CITY per city + buildings with researchBonus (e.g. library +2).
- */
-export function calculateResearch(state: GameState, factionId: FactionId): number {
-  const tiles = getOwnedTiles(state, factionId);
-  const factionCities = getFactionCities(state, factionId);
-
-  let research = factionCities.length * BASE_RESEARCH_PER_CITY;
-  for (const tile of tiles) {
-    if (tile.building !== null) {
-      research += BUILDING_STATS[tile.building].researchBonus;
+  // Count city garrison troops
+  for (const city of state.cities.values()) {
+    if (city.factionId === factionId) {
+      totalTroops += totalTroopsCount(city.garrison);
     }
   }
 
-  return research;
+  const foodConsumed = Math.ceil((totalTroops / 100) * FOOD_PER_100_TROOPS);
+
+  return { gold: 0, food: foodConsumed, wood: 0, iron: 0 };
 }
 
 /**
- * Process one tick of economy for all factions:
- * 1. Calculate gold income: sum of TERRAIN_GOLD for owned tiles + building gold bonuses
- * 2. Calculate food production: base per city + plains (base 1, +1 with agriculture) + granary buildings
- * 3. Food consumption: each unit costs FOOD_PER_UNIT (1) food per tick
- * 4. Starvation: if food deficit, units lose 1 HP (strength) each
- * 5. Research income: base per city + libraries + building research bonuses
- * 6. Eliminate factions with 0 cities
+ * Process economy for one tick:
+ * 1. Territory income: each owned tile produces based on TERRAIN_INCOME + building income
+ * 2. Food consumption: total troops x FOOD_PER_100_TROOPS / 100
+ * 3. Starvation: if food < 0, troops desert (lose 10% of all troops)
+ * 4. City production: process training queues
+ * 5. Eliminate factions with 0 cities
  */
 export function processEconomy(state: GameState): GameState {
   let s = state;
@@ -156,79 +119,120 @@ export function processEconomy(state: GameState): GameState {
   for (const [factionId, faction] of s.factions) {
     if (!faction.alive) continue;
 
-    // Step 6: Eliminate factions with 0 cities
+    // Step 5: Eliminate factions with 0 cities
     const factionCities = getFactionCities(s, factionId);
     if (factionCities.length === 0) {
       s = updateFaction(s, factionId, { alive: false });
-      s = addLogEntry(s, `${faction.name} has been eliminated!`, "economy", [factionId]);
+      s = addLogEntry(
+        s,
+        `${faction.name} has been eliminated!`,
+        "economy",
+        [factionId],
+      );
       continue;
     }
 
-    // Step 1: Gold income
-    const goldIncome = calculateGoldIncome(s, factionId);
+    // Step 1: Territory income
+    const income = calculateIncome(s, factionId);
 
-    // Steps 2 & 3: Food production and consumption
-    const foodBalance = calculateFoodBalance(s, factionId);
+    // Step 2: Food consumption
+    const upkeep = calculateUpkeep(s, factionId);
 
-    // Total available food = current reserves + production - consumption
-    const available = faction.food + faction.storedFood + foodBalance.produced - foodBalance.consumed;
+    const currentResources = faction.resources;
+    const newResources: Resources = {
+      gold: currentResources.gold + income.gold,
+      food: currentResources.food + income.food - upkeep.food,
+      wood: currentResources.wood + income.wood,
+      iron: currentResources.iron + income.iron,
+    };
 
-    let newFood: number;
-    let newStoredFood: number;
+    s = updateFaction(s, factionId, { resources: newResources });
 
-    if (available >= 0) {
-      if (available > MAX_STORED_FOOD) {
-        newStoredFood = MAX_STORED_FOOD;
-        newFood = available - MAX_STORED_FOOD;
-      } else {
-        newFood = available;
-        newStoredFood = 0;
-      }
-    } else {
-      newFood = 0;
-      newStoredFood = 0;
-    }
-
-    s = updateFaction(s, factionId, {
-      gold: faction.gold + goldIncome,
-      food: newFood,
-      storedFood: newStoredFood,
-    });
-
-    // Step 4: Starvation — if food deficit, units lose 1 HP each
-    if (available < 0) {
-      const deficit = Math.abs(available);
-      const unitIds = getFactionUnitIds(s, factionId);
-      const unitsToStarve = Math.min(deficit, unitIds.length);
-
-      for (let i = 0; i < unitsToStarve; i++) {
-        const unit = s.units.get(unitIds[i]);
-        if (unit === undefined) continue;
-
-        const newStrength = unit.strength - 1;
-        if (newStrength <= 0) {
-          const newUnits = new Map(s.units);
-          newUnits.delete(unitIds[i]);
-          s = { ...s, units: newUnits };
-        } else {
-          s = updateUnit(s, unitIds[i], { strength: newStrength });
-        }
-      }
-
+    // Step 3: Starvation - if food goes below 0, troops desert
+    if (newResources.food < 0) {
+      s = applyStarvation(s, factionId);
+      // Clamp food to 0 after starvation
+      const starveFaction = s.factions.get(factionId)!;
+      s = updateFaction(s, factionId, {
+        resources: { ...starveFaction.resources, food: 0 },
+      });
       s = addLogEntry(
         s,
-        `${faction.name} is starving! ${unitsToStarve} unit(s) affected.`,
+        `${faction.name} is starving! Troops are deserting.`,
         "economy",
         [factionId],
       );
     }
 
-    // Step 5: Research income
-    const researchIncome = calculateResearch(s, factionId);
-    if (researchIncome > 0) {
-      const currentFaction = s.factions.get(factionId)!;
-      s = updateFaction(s, factionId, {
-        research: currentFaction.research + researchIncome,
+    // Step 4: Process city training queues
+    s = processTrainingQueues(s, factionId);
+  }
+
+  return s;
+}
+
+/**
+ * Apply starvation: 10% of all troops desert across all armies and garrisons.
+ */
+function applyStarvation(state: GameState, factionId: FactionId): GameState {
+  let s = state;
+
+  // Desert from armies
+  for (const army of getFactionArmies(s, factionId)) {
+    const deserted = applyDesertionToTroops(army.troops, STARVATION_DESERTION_RATE);
+    const newArmies = new Map(s.armies);
+    newArmies.set(army.id, { ...army, troops: deserted });
+    s = { ...s, armies: newArmies };
+  }
+
+  // Desert from city garrisons
+  for (const city of getFactionCities(s, factionId)) {
+    const deserted = applyDesertionToTroops(city.garrison, STARVATION_DESERTION_RATE);
+    s = updateCity(s, city.id, { garrison: deserted });
+  }
+
+  return s;
+}
+
+/**
+ * Process training queues for all cities of a faction.
+ * Decrement ticksRemaining; when done, add troops to garrison.
+ */
+function processTrainingQueues(
+  state: GameState,
+  factionId: FactionId,
+): GameState {
+  let s = state;
+
+  for (const city of getFactionCities(s, factionId)) {
+    if (city.trainingQueue === null) continue;
+
+    const queue = city.trainingQueue;
+    const newTicksRemaining = queue.ticksRemaining - 1;
+
+    if (newTicksRemaining <= 0) {
+      // Training complete: add troops to garrison
+      const troopType = queue.troopType;
+      const newGarrison: Troops = {
+        ...city.garrison,
+        [troopType]: city.garrison[troopType] + queue.amount,
+      };
+
+      s = updateCity(s, city.id, {
+        garrison: newGarrison,
+        trainingQueue: null,
+      });
+
+      s = addLogEntry(
+        s,
+        `${city.name} finished training ${queue.amount} ${troopType}.`,
+        "city",
+        [factionId],
+      );
+    } else {
+      // Still training: decrement ticks remaining
+      s = updateCity(s, city.id, {
+        trainingQueue: { ...queue, ticksRemaining: newTicksRemaining },
       });
     }
   }

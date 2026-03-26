@@ -9,36 +9,78 @@ export interface HexCoord {
 
 export type TerrainType = "plains" | "forest" | "mountain" | "water" | "desert";
 
-export type NaturalResource = "iron" | "horses" | "saltpeter" | "oil" | null;
-
 export interface Tile {
   readonly coord: HexCoord;
   readonly terrain: TerrainType;
   readonly owner: FactionId | null;
-  readonly naturalResource: NaturalResource;
   readonly building: BuildingType | null;
-  readonly cityId: CityId | null; // non-null if this tile IS a city center
-  readonly isCityOutskirt: CityId | null; // non-null if within a city's outskirts
+  readonly cityId: CityId | null;
 }
 
-// === Units ===
+// === Resources ===
 
-export type UnitType = "infantry" | "cavalry" | "artillery" | "settler" | "scout";
+export interface Resources {
+  readonly gold: number;
+  readonly food: number;
+  readonly wood: number;
+  readonly iron: number;
+}
 
-export interface Unit {
-  readonly id: string;
+// === Troop Types (三角克制) ===
+
+export type TroopType = "infantry" | "cavalry" | "archer";
+
+export interface Troops {
+  readonly infantry: number;
+  readonly cavalry: number;
+  readonly archer: number;
+}
+
+// === Generals (将领) ===
+
+export type GeneralId = string;
+export type GeneralSkillType = "passive" | "active";
+
+export interface GeneralSkill {
+  readonly name: string;
+  readonly type: GeneralSkillType;
+  readonly description: string;
+}
+
+export interface GeneralDef {
+  readonly id: GeneralId;
+  readonly name: string;
+  readonly specialty: TroopType | "all";
+  readonly baseAttack: number;
+  readonly baseDefense: number;
+  readonly baseSpeed: number;
+  readonly skill: GeneralSkill;
+}
+
+export interface General {
+  readonly id: GeneralId;
+  readonly defId: GeneralId; // reference to GeneralDef
   readonly factionId: FactionId;
-  readonly type: UnitType;
-  readonly coord: HexCoord;
-  readonly strength: number;
-  readonly maxStrength: number;
-  readonly movement: number;
-  readonly maxMovement: number;
-  readonly upgraded: boolean; // has been upgraded by tech
+  readonly name: string;
+  readonly level: number;
+  readonly exp: number;
+  readonly alive: boolean;
+  readonly respawnTick: number | null; // tick when available again (null = available)
 }
 
-// Trump relationships: infantry > cavalry > artillery > infantry
-export type TrumpMap = Record<UnitType, UnitType | null>;
+// === Armies (将领 + 兵力) ===
+
+export type ArmyId = string;
+
+export interface Army {
+  readonly id: ArmyId;
+  readonly factionId: FactionId;
+  readonly generalId: GeneralId;
+  readonly troops: Troops;
+  readonly coord: HexCoord;
+  readonly target: HexCoord | null; // marching destination (null = stationary)
+  readonly state: "idle" | "marching" | "battling" | "returning";
+}
 
 // === Cities ===
 
@@ -50,58 +92,39 @@ export interface City {
   readonly name: string;
   readonly coord: HexCoord;
   readonly isCapital: boolean;
-  readonly hasWalls: boolean;
-  readonly production: number; // accumulated production points
-  readonly currentProject: ProductionProject | null;
+  readonly level: number; // 1-5, affects production
+  readonly walls: number; // 0-3, defense bonus
+  readonly garrison: Troops; // troops defending the city (no general needed)
+  readonly trainingQueue: TrainingOrder | null;
 }
 
-export interface ProductionProject {
-  readonly type: "unit" | "building" | "wonder";
-  readonly target: string; // unit type, building type, or wonder id
-  readonly invested: number;
-  readonly cost: number;
+export interface TrainingOrder {
+  readonly troopType: TroopType;
+  readonly amount: number;
+  readonly ticksRemaining: number;
 }
 
 // === Buildings ===
 
 export type BuildingType =
-  | "granary"
-  | "barracks"
-  | "workshop"
-  | "market"
-  | "library"
-  | "city_walls"
-  | "harbor"
-  | "fortress"
-  | "factory"
-  | "airport";
+  | "farm"        // +food on plains
+  | "lumber_mill" // +wood on forest
+  | "mine"        // +iron on mountain
+  | "market"      // +gold anywhere
+  | "barracks"    // train speed bonus
+  | "watchtower"  // +vision range
+  | "fortress";   // +defense on this tile
 
 // === Tech ===
 
 export type TechId = string;
-export type TechEra = "ancient" | "classical" | "medieval" | "industrial" | "modern";
 
 export interface Tech {
   readonly id: TechId;
   readonly name: string;
-  readonly era: TechEra;
-  readonly cost: number;
+  readonly cost: Resources;
   readonly prerequisites: readonly TechId[];
-  readonly effects: readonly string[]; // human-readable descriptions for AI prompt
-}
-
-// === Wonders ===
-
-export type WonderId = string;
-
-export interface Wonder {
-  readonly id: WonderId;
-  readonly name: string;
-  readonly era: TechEra;
-  readonly cost: number;
-  readonly effect: string;
-  readonly builtBy: FactionId | null; // null = not yet built
-  readonly cityId: CityId | null;
+  readonly effects: readonly string[];
 }
 
 // === Factions ===
@@ -113,13 +136,10 @@ export interface Faction {
   readonly name: string;
   readonly modelProvider: string;
   readonly color: string;
-  readonly gold: number;
-  readonly food: number;
-  readonly storedFood: number; // excess food (max 20)
-  readonly research: number; // accumulated research points
-  readonly techs: readonly TechId[]; // researched tech ids
+  readonly resources: Resources;
+  readonly techs: readonly TechId[];
   readonly alive: boolean;
-  readonly controlledResources: readonly NaturalResource[]; // from tiles with resources
+  readonly territoryCount: number; // cached count of owned tiles
 }
 
 // === Diplomacy ===
@@ -127,36 +147,43 @@ export interface Faction {
 export type DiplomaticStatus = "neutral" | "allied" | "war" | "peace";
 
 export interface DiplomacyState {
-  readonly relations: ReadonlyMap<string, DiplomaticStatus>; // key: "factionA:factionB"
+  readonly relations: ReadonlyMap<string, DiplomaticStatus>;
 }
 
-// === Actions (AI decisions per tick) ===
+// === AI Decision (每 tick) ===
 
 export interface TurnDecision {
   readonly factionId: FactionId;
-  readonly military: readonly MilitaryOrder[];
+  readonly armies: readonly ArmyOrder[];
   readonly cities: readonly CityOrder[];
   readonly research: TechId | null;
+  readonly build: readonly BuildOrder[];
   readonly diplomacy: readonly DiplomacyOrder[];
 }
 
-export interface MilitaryOrder {
-  readonly unitId: string;
-  readonly action: "move" | "attack" | "fortify" | "disband";
-  readonly to?: HexCoord;
+export interface ArmyOrder {
+  readonly generalId: GeneralId;
+  readonly action: "march" | "attack" | "retreat" | "garrison" | "idle";
+  readonly target?: HexCoord;
+  readonly troops?: Partial<Troops>; // for new deployments
 }
 
 export interface CityOrder {
   readonly cityId: CityId;
-  readonly action: "train" | "build" | "rush" | "idle";
-  readonly target?: string; // unit type, building type, or wonder id
-  readonly hex?: HexCoord; // for building placement
+  readonly action: "train" | "upgrade_walls" | "upgrade_city" | "idle";
+  readonly troopType?: TroopType;
+  readonly amount?: number;
+}
+
+export interface BuildOrder {
+  readonly hex: HexCoord;
+  readonly building: BuildingType;
 }
 
 export interface DiplomacyOrder {
-  readonly action: "declare_war" | "propose_alliance" | "break_alliance" | "offer_peace" | "demand_tribute" | "send_gold";
+  readonly action: "declare_war" | "propose_alliance" | "break_alliance" | "offer_peace" | "send_tribute";
   readonly targetFactionId: FactionId;
-  readonly amount?: number; // for send_gold / demand_tribute
+  readonly amount?: number;
 }
 
 // === Game State ===
@@ -164,10 +191,10 @@ export interface DiplomacyOrder {
 export interface GameState {
   readonly tick: number;
   readonly tiles: ReadonlyMap<string, Tile>;
-  readonly units: ReadonlyMap<string, Unit>; // key: unit id
+  readonly armies: ReadonlyMap<ArmyId, Army>;
+  readonly generals: ReadonlyMap<GeneralId, General>;
   readonly cities: ReadonlyMap<CityId, City>;
   readonly factions: ReadonlyMap<FactionId, Faction>;
-  readonly wonders: readonly Wonder[];
   readonly diplomacy: DiplomacyState;
   readonly log: readonly LogEntry[];
   readonly winner: FactionId | null;
@@ -177,7 +204,7 @@ export interface GameState {
 export interface LogEntry {
   readonly tick: number;
   readonly message: string;
-  readonly category: "combat" | "diplomacy" | "economy" | "tech" | "city" | "system";
+  readonly category: "combat" | "diplomacy" | "economy" | "tech" | "city" | "territory" | "system";
   readonly involvedFactions: readonly FactionId[];
 }
 

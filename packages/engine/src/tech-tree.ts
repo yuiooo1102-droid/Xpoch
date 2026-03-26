@@ -1,4 +1,4 @@
-import type { GameState, FactionId, TechId, Unit } from "@xpoch/shared";
+import type { GameState, FactionId, TechId, Resources } from "@xpoch/shared";
 import { TECH_TREE, type TechDef } from "@xpoch/shared";
 import { updateFaction, addLogEntry } from "./game-state";
 
@@ -38,7 +38,31 @@ export function hasTech(
 }
 
 /**
- * Research a tech. Deducts research cost from faction's accumulated research.
+ * Check if faction can afford a resource cost.
+ */
+function canAffordResources(have: Resources, cost: Resources): boolean {
+  return (
+    have.gold >= cost.gold &&
+    have.food >= cost.food &&
+    have.wood >= cost.wood &&
+    have.iron >= cost.iron
+  );
+}
+
+/**
+ * Subtract resources immutably.
+ */
+function subtractResources(have: Resources, cost: Resources): Resources {
+  return {
+    gold: have.gold - cost.gold,
+    food: have.food - cost.food,
+    wood: have.wood - cost.wood,
+    iron: have.iron - cost.iron,
+  };
+}
+
+/**
+ * Research a tech. Deducts resource cost from faction.
  * Returns null if can't afford or prerequisites not met.
  */
 export function researchTech(
@@ -61,12 +85,12 @@ export function researchTech(
   );
   if (!prereqsMet) return null;
 
-  // Check cost
-  if (faction.research < techDef.cost) return null;
+  // Check cost (resource-based in v3)
+  if (!canAffordResources(faction.resources, techDef.cost)) return null;
 
   // Deduct cost and add tech
   let s = updateFaction(state, factionId, {
-    research: faction.research - techDef.cost,
+    resources: subtractResources(faction.resources, techDef.cost),
     techs: [...faction.techs, techId],
   });
 
@@ -77,47 +101,5 @@ export function researchTech(
     [factionId],
   );
 
-  // Apply immediate effects
-  s = applyTechEffects(s, factionId, techId);
-
   return s;
-}
-
-/**
- * Apply tech effects when researched (e.g., upgrade units, unlock buildings).
- */
-export function applyTechEffects(
-  state: GameState,
-  factionId: FactionId,
-  techId: TechId,
-): GameState {
-  switch (techId) {
-    case "iron_working":
-      return upgradeUnits(state, factionId, "infantry", { strength: 5, maxStrength: 5, upgraded: true });
-    case "horseback_riding":
-      return upgradeUnits(state, factionId, "cavalry", { strength: 5, maxStrength: 5, movement: 3, maxMovement: 3, upgraded: true });
-    case "gunpowder":
-      return upgradeUnits(state, factionId, "artillery", { strength: 6, maxStrength: 6, upgraded: true });
-    default:
-      return state;
-  }
-}
-
-function upgradeUnits(
-  state: GameState,
-  factionId: FactionId,
-  unitType: string,
-  upgrades: Partial<Unit>,
-): GameState {
-  const newUnits = new Map(state.units);
-  let changed = false;
-
-  for (const [unitId, unit] of newUnits) {
-    if (unit.factionId === factionId && unit.type === unitType && !unit.upgraded) {
-      newUnits.set(unitId, { ...unit, ...upgrades });
-      changed = true;
-    }
-  }
-
-  return changed ? { ...state, units: newUnits } : state;
 }

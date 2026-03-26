@@ -26,11 +26,12 @@ describe("Integration: full game loop with mock AI", () => {
     expect(updates.length).toBe(10);
     expect(loop.getState().tick).toBe(10);
 
-    // All factions should still have valid state
+    // All factions should still have valid state with v3 resources
     for (const faction of loop.getState().factions.values()) {
-      expect(typeof faction.gold).toBe("number");
-      expect(typeof faction.food).toBe("number");
-      expect(typeof faction.research).toBe("number");
+      expect(typeof faction.resources.gold).toBe("number");
+      expect(typeof faction.resources.food).toBe("number");
+      expect(typeof faction.resources.wood).toBe("number");
+      expect(typeof faction.resources.iron).toBe("number");
     }
   });
 

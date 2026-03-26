@@ -5,7 +5,10 @@ import { MAP_SIZE } from "@xpoch/shared";
 describe("generateMap", () => {
   it("generates a map with correct number of tiles", () => {
     const tiles = generateMap(MAP_SIZE, 42);
-    expect(tiles.size).toBe(331);
+    // hexDisk with radius 12: 1 + 6*(1+2+...+12) = 1 + 6*78 = 469
+    // Actually: sum of hexRing(0..12) = 1 + 6 + 12 + 18 + ... + 72
+    // = 1 + 6*(1+2+...+12) = 1 + 6*78 = 469
+    expect(tiles.size).toBe(469);
   });
 
   it("every tile has valid terrain", () => {
@@ -23,48 +26,20 @@ describe("generateMap", () => {
     }
   });
 
-  it("every tile has building: null, cityId: null, isCityOutskirt: null", () => {
+  it("every tile has building: null and cityId: null", () => {
     const tiles = generateMap(MAP_SIZE, 42);
     for (const tile of tiles.values()) {
       expect(tile.building).toBeNull();
       expect(tile.cityId).toBeNull();
-      expect(tile.isCityOutskirt).toBeNull();
     }
   });
 
-  it("natural resources are only on valid terrains", () => {
-    const tiles = generateMap(MAP_SIZE, 42);
-    const validResourceTerrains: Record<string, string[]> = {
-      iron: ["mountain", "forest"],
-      horses: ["plains"],
-      saltpeter: ["desert", "plains"],
-      oil: ["desert", "mountain"],
-    };
+  it("tiles have correct coord structure", () => {
+    const tiles = generateMap(5, 42);
     for (const tile of tiles.values()) {
-      if (tile.naturalResource !== null) {
-        const allowed = validResourceTerrains[tile.naturalResource];
-        expect(allowed).toBeDefined();
-        expect(allowed).toContain(tile.terrain);
-      }
-    }
-  });
-
-  it("some land tiles have natural resources (~15%)", () => {
-    const tiles = generateMap(MAP_SIZE, 42);
-    const landTiles = [...tiles.values()].filter((t) => t.terrain !== "water");
-    const resourceTiles = landTiles.filter((t) => t.naturalResource !== null);
-    // Expect roughly 5-25% (with some tolerance for randomness)
-    const ratio = resourceTiles.length / landTiles.length;
-    expect(ratio).toBeGreaterThan(0.03);
-    expect(ratio).toBeLessThan(0.35);
-  });
-
-  it("water tiles never have natural resources", () => {
-    const tiles = generateMap(MAP_SIZE, 42);
-    for (const tile of tiles.values()) {
-      if (tile.terrain === "water") {
-        expect(tile.naturalResource).toBeNull();
-      }
+      expect(tile.coord).toBeDefined();
+      expect(typeof tile.coord.q).toBe("number");
+      expect(typeof tile.coord.r).toBe("number");
     }
   });
 
@@ -80,5 +55,11 @@ describe("generateMap", () => {
     const aTerrain = [...a.values()].map((t) => t.terrain).join("");
     const bTerrain = [...b.values()].map((t) => t.terrain).join("");
     expect(aTerrain).not.toBe(bTerrain);
+  });
+
+  it("generates correct tile count for small radius", () => {
+    const tiles = generateMap(2, 42);
+    // radius 2: 1 + 6 + 12 = 19
+    expect(tiles.size).toBe(19);
   });
 });

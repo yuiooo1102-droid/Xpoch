@@ -1,28 +1,18 @@
-import type { UnitType, TechEra, BuildingType, TerrainType, NaturalResource, TrumpMap } from "./types";
+import type { TerrainType, TroopType, BuildingType, GeneralDef, Resources } from "./types";
 
 // === Map ===
+export const MAP_SIZE = 12;
 
-export const MAP_SIZE = 10;
-
-// === Terrain Stats ===
-
-export const TERRAIN_GOLD: Record<TerrainType, number> = {
-  plains: 1,
-  forest: 0,
-  mountain: 1,
-  water: 0,
-  desert: 0,
+// === Terrain Resources per tick ===
+export const TERRAIN_INCOME: Record<TerrainType, Partial<Resources>> = {
+  plains: { food: 2, gold: 1 },
+  forest: { wood: 2, gold: 1 },
+  mountain: { iron: 2, gold: 1 },
+  desert: { gold: 2 },
+  water: {},
 };
 
-export const TERRAIN_PRODUCTION: Record<TerrainType, number> = {
-  plains: 2,
-  forest: 2,
-  mountain: 1,
-  water: 0,
-  desert: 0,
-};
-
-export const TERRAIN_DEFENSE_BONUS: Record<TerrainType, number> = {
+export const TERRAIN_DEFENSE: Record<TerrainType, number> = {
   plains: 0,
   forest: 1,
   mountain: 2,
@@ -38,150 +28,128 @@ export const TERRAIN_MOVEMENT_COST: Record<TerrainType, number> = {
   desert: 1,
 };
 
-// === Unit Stats ===
-
-export interface UnitStats {
-  readonly strength: number;
-  readonly movement: number;
-  readonly cost: number; // gold
+// === Troop Stats ===
+export interface TroopStats {
+  readonly attack: number;
+  readonly defense: number;
+  readonly speed: number;
+  readonly foodCost: number; // per 100 troops per tick
+  readonly trainCost: Resources; // per 100 troops
+  readonly trainTicks: number; // per 100 troops
 }
 
-export const UNIT_STATS: Record<UnitType, UnitStats> = {
-  infantry: { strength: 3, movement: 1, cost: 4 },
-  cavalry: { strength: 3, movement: 2, cost: 6 },
-  artillery: { strength: 4, movement: 1, cost: 8 },
-  settler: { strength: 0, movement: 1, cost: 10 },
-  scout: { strength: 1, movement: 3, cost: 3 },
+export const TROOP_STATS: Record<TroopType, TroopStats> = {
+  infantry: {
+    attack: 3, defense: 4, speed: 1, foodCost: 1,
+    trainCost: { gold: 2, food: 3, wood: 1, iron: 0 },
+    trainTicks: 1,
+  },
+  cavalry: {
+    attack: 4, defense: 2, speed: 3, foodCost: 2,
+    trainCost: { gold: 4, food: 4, wood: 0, iron: 2 },
+    trainTicks: 2,
+  },
+  archer: {
+    attack: 3, defense: 2, speed: 1, foodCost: 1,
+    trainCost: { gold: 3, food: 2, wood: 3, iron: 0 },
+    trainTicks: 1,
+  },
 };
 
-// Trump: A trumps B means A deals damage first
-export const TRUMP: TrumpMap = {
-  infantry: "cavalry",    // infantry trumps cavalry
-  cavalry: "artillery",   // cavalry trumps artillery
-  artillery: "infantry",  // artillery trumps infantry
-  settler: null,
-  scout: null,
+// === Trump (克制) ===
+// Infantry > Cavalry > Archer > Infantry
+export const TRUMP_MAP: Record<TroopType, TroopType> = {
+  infantry: "cavalry",
+  cavalry: "archer",
+  archer: "infantry",
 };
+export const TRUMP_BONUS = 1.3; // 30% damage bonus when trumping
 
-export const MAX_STACK_SIZE = 3;
+// === General Pool ===
+export const GENERAL_POOL: readonly GeneralDef[] = [
+  { id: "lubu", name: "吕布", specialty: "cavalry", baseAttack: 9, baseDefense: 5, baseSpeed: 3, skill: { name: "无双", type: "passive", description: "攻击+30%" } },
+  { id: "zhuge", name: "诸葛亮", specialty: "archer", baseAttack: 7, baseDefense: 6, baseSpeed: 2, skill: { name: "火攻", type: "active", description: "对目标格额外30%伤害" } },
+  { id: "guanyu", name: "关羽", specialty: "infantry", baseAttack: 8, baseDefense: 8, baseSpeed: 2, skill: { name: "武圣", type: "passive", description: "防御+30%" } },
+  { id: "zhaoyn", name: "赵云", specialty: "cavalry", baseAttack: 8, baseDefense: 6, baseSpeed: 3, skill: { name: "龙胆", type: "passive", description: "速度+1, 首回合双倍伤害" } },
+  { id: "caocao", name: "曹操", specialty: "all", baseAttack: 7, baseDefense: 7, baseSpeed: 2, skill: { name: "奸雄", type: "passive", description: "领地资源+20%" } },
+  { id: "zhouyu", name: "周瑜", specialty: "archer", baseAttack: 8, baseDefense: 5, baseSpeed: 2, skill: { name: "连环计", type: "active", description: "敌将1tick无法行动" } },
+  { id: "zhangf", name: "张飞", specialty: "infantry", baseAttack: 9, baseDefense: 6, baseSpeed: 2, skill: { name: "咆哮", type: "passive", description: "周围友军攻击+15%" } },
+  { id: "simay", name: "司马懿", specialty: "all", baseAttack: 6, baseDefense: 8, baseSpeed: 2, skill: { name: "隐忍", type: "passive", description: "科技速度+30%" } },
+  { id: "sunce", name: "孙策", specialty: "cavalry", baseAttack: 8, baseDefense: 5, baseSpeed: 3, skill: { name: "霸王", type: "passive", description: "攻城伤害+50%" } },
+  { id: "huangz", name: "黄忠", specialty: "archer", baseAttack: 9, baseDefense: 4, baseSpeed: 1, skill: { name: "百步穿杨", type: "passive", description: "弓兵攻击+25%" } },
+];
+
+export const GENERALS_PER_FACTION = 3;
+export const GENERAL_RESPAWN_TICKS = 3;
+export const GENERAL_MAX_LEVEL = 10;
+export const EXP_PER_LEVEL = 100;
 
 // === City ===
+export const CAPITAL_DEFENSE = 8;
+export const CITY_DEFENSE = 4;
+export const WALL_DEFENSE_PER_LEVEL = 3; // walls 0-3 → +0/+3/+6/+9
+export const MAX_CITY_LEVEL = 5;
+export const MAX_WALLS = 3;
+export const CITY_UPGRADE_COST: Resources = { gold: 20, food: 15, wood: 15, iron: 10 };
+export const WALL_UPGRADE_COST: Resources = { gold: 10, food: 0, wood: 10, iron: 15 };
 
-export const CITY_DEFENSE_BONUS = 4;
-export const CAPITAL_DEFENSE_BONUS = 8;
-export const WALLS_DEFENSE_BONUS = 4;
-export const MIN_CITY_DISTANCE = 3; // min hexes between cities
-export const MAX_CITIES = 4; // capital + 3
+// === Territory ===
+export const BASE_GOLD_PER_TILE = 1;
+export const FOOD_PER_100_TROOPS = 1;
+export const MAX_ARMIES_PER_FACTION = 3; // limited by generals
 
-// === Economy ===
-
-export const FOOD_PER_UNIT = 1;
-export const MAX_STORED_FOOD = 20;
-export const RUSH_GOLD_MULTIPLIER = 2; // pay 2x gold to rush production
-export const STARTING_GOLD = 20;
-export const STARTING_FOOD = 30;
-export const BASE_FOOD_PER_CITY = 3;
-export const BASE_RESEARCH_PER_CITY = 1;
-export const STARTING_TECHS: readonly string[] = ["agriculture"];
-
-// === Building Stats ===
-
-export interface BuildingStats {
-  readonly cost: number; // production cost
-  readonly terrains: readonly TerrainType[]; // allowed terrains ("any_land" handled separately)
-  readonly anyLand: boolean;
-  readonly effect: string;
-  readonly goldBonus: number;
-  readonly productionBonus: number;
-  readonly researchBonus: number;
-  readonly foodBonus: number;
+// === Buildings ===
+export interface BuildingDef {
+  readonly type: BuildingType;
+  readonly terrain: readonly TerrainType[] | "any_land";
+  readonly cost: Resources;
+  readonly income: Partial<Resources>;
   readonly defenseBonus: number;
+  readonly visionBonus: number;
   readonly requiresTech: string | null;
 }
 
-export const BUILDING_STATS: Record<BuildingType, BuildingStats> = {
-  granary:     { cost: 4,  terrains: ["plains"], anyLand: false, effect: "+2 food", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 2, defenseBonus: 0, requiresTech: "pottery" },
-  barracks:    { cost: 6,  terrains: [], anyLand: true, effect: "Units +1 str", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: null },
-  workshop:    { cost: 5,  terrains: ["mountain", "forest"], anyLand: false, effect: "+2 production", goldBonus: 0, productionBonus: 2, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "mining" },
-  market:      { cost: 5,  terrains: [], anyLand: true, effect: "+2 gold/turn", goldBonus: 2, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "currency" },
-  library:     { cost: 6,  terrains: [], anyLand: true, effect: "+2 research/turn", goldBonus: 0, productionBonus: 0, researchBonus: 2, foodBonus: 0, defenseBonus: 0, requiresTech: null },
-  city_walls:  { cost: 8,  terrains: [], anyLand: true, effect: "+4 city defense", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 4, requiresTech: "masonry" },
-  harbor:      { cost: 7,  terrains: ["water"], anyLand: false, effect: "+2 gold, +1 prod", goldBonus: 2, productionBonus: 1, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "sailing" },
-  fortress:    { cost: 10, terrains: [], anyLand: true, effect: "+3 hex defense, holds 5", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 3, requiresTech: "masonry" },
-  factory:     { cost: 12, terrains: [], anyLand: true, effect: "+4 production", goldBonus: 0, productionBonus: 4, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "industrialization" },
-  airport:     { cost: 15, terrains: [], anyLand: true, effect: "Deploy aircraft here", goldBonus: 0, productionBonus: 0, researchBonus: 0, foodBonus: 0, defenseBonus: 0, requiresTech: "flight" },
+export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
+  farm:        { type: "farm",        terrain: ["plains"],   cost: { gold: 3, food: 0, wood: 3, iron: 0 }, income: { food: 3 }, defenseBonus: 0, visionBonus: 0, requiresTech: null },
+  lumber_mill: { type: "lumber_mill", terrain: ["forest"],   cost: { gold: 3, food: 0, wood: 0, iron: 2 }, income: { wood: 3 }, defenseBonus: 0, visionBonus: 0, requiresTech: null },
+  mine:        { type: "mine",        terrain: ["mountain"], cost: { gold: 5, food: 0, wood: 3, iron: 0 }, income: { iron: 3 }, defenseBonus: 0, visionBonus: 0, requiresTech: "mining" },
+  market:      { type: "market",      terrain: "any_land",   cost: { gold: 0, food: 0, wood: 5, iron: 2 }, income: { gold: 4 }, defenseBonus: 0, visionBonus: 0, requiresTech: "currency" },
+  barracks:    { type: "barracks",    terrain: "any_land",   cost: { gold: 5, food: 0, wood: 5, iron: 3 }, income: {},           defenseBonus: 0, visionBonus: 0, requiresTech: null },
+  watchtower:  { type: "watchtower",  terrain: "any_land",   cost: { gold: 3, food: 0, wood: 4, iron: 1 }, income: {},           defenseBonus: 1, visionBonus: 2, requiresTech: null },
+  fortress:    { type: "fortress",    terrain: "any_land",   cost: { gold: 10, food: 0, wood: 8, iron: 8 }, income: {},          defenseBonus: 5, visionBonus: 1, requiresTech: "masonry" },
 };
 
 // === Tech Tree ===
-
 export interface TechDef {
   readonly id: string;
   readonly name: string;
-  readonly era: TechEra;
-  readonly cost: number;
+  readonly cost: Resources;
   readonly prerequisites: readonly string[];
   readonly effects: readonly string[];
 }
 
 export const TECH_TREE: readonly TechDef[] = [
-  // Era 1: Ancient
-  { id: "agriculture", name: "Agriculture", era: "ancient", cost: 6, prerequisites: [], effects: ["Plains +1 food"] },
-  { id: "mining", name: "Mining", era: "ancient", cost: 6, prerequisites: [], effects: ["Mountain +1 gold"] },
-  { id: "bronze_working", name: "Bronze Working", era: "ancient", cost: 8, prerequisites: [], effects: ["Unlock Barracks"] },
-  { id: "pottery", name: "Pottery", era: "ancient", cost: 6, prerequisites: [], effects: ["Unlock Granary"] },
-  { id: "animal_husbandry", name: "Animal Husbandry", era: "ancient", cost: 8, prerequisites: [], effects: ["Unlock Cavalry"] },
-
-  // Era 2: Classical
-  { id: "iron_working", name: "Iron Working", era: "classical", cost: 12, prerequisites: ["bronze_working", "mining"], effects: ["Infantry → Swordsmen (str 5)"] },
-  { id: "horseback_riding", name: "Horseback Riding", era: "classical", cost: 12, prerequisites: ["animal_husbandry"], effects: ["Cavalry → Knights (str 5, move 3)"] },
-  { id: "masonry", name: "Masonry", era: "classical", cost: 14, prerequisites: ["mining"], effects: ["Unlock City Walls, Fortress"] },
-  { id: "currency", name: "Currency", era: "classical", cost: 12, prerequisites: ["pottery"], effects: ["Unlock Market (+2 gold)"] },
-  { id: "navigation", name: "Navigation", era: "classical", cost: 16, prerequisites: ["animal_husbandry"], effects: ["Units can cross water"] },
-
-  // Era 3: Medieval
-  { id: "gunpowder", name: "Gunpowder", era: "medieval", cost: 18, prerequisites: ["iron_working"], effects: ["Artillery → Cannon (str 6)"] },
-  { id: "engineering", name: "Engineering", era: "medieval", cost: 20, prerequisites: ["masonry", "currency"], effects: ["Buildings cost -2 production"] },
-  { id: "sailing", name: "Sailing", era: "medieval", cost: 18, prerequisites: ["navigation"], effects: ["Units stop on water, Unlock Harbor"] },
-  { id: "theology", name: "Theology", era: "medieval", cost: 20, prerequisites: ["currency"], effects: ["Libraries +1 research"] },
-  { id: "feudalism", name: "Feudalism", era: "medieval", cost: 22, prerequisites: ["horseback_riding", "masonry"], effects: ["+1 max stacking"] },
-
-  // Era 4: Industrial
-  { id: "industrialization", name: "Industrialization", era: "industrial", cost: 24, prerequisites: ["engineering", "gunpowder"], effects: ["Unlock Tanks (str 7), Factory"] },
-  { id: "railroad", name: "Railroad", era: "industrial", cost: 26, prerequisites: ["engineering"], effects: ["All units +1 movement"] },
-  { id: "rifling", name: "Rifling", era: "industrial", cost: 24, prerequisites: ["gunpowder"], effects: ["Infantry +2 strength"] },
-  { id: "steam_power", name: "Steam Power", era: "industrial", cost: 28, prerequisites: ["sailing", "engineering"], effects: ["Cities +3 production"] },
-  { id: "dynamite", name: "Dynamite", era: "industrial", cost: 26, prerequisites: ["gunpowder"], effects: ["+4 damage vs cities"] },
-
-  // Era 5: Modern
-  { id: "flight", name: "Flight", era: "modern", cost: 32, prerequisites: ["industrialization"], effects: ["Unlock Aircraft (str 6, move 4), Airport"] },
-  { id: "nuclear_fission", name: "Nuclear Fission", era: "modern", cost: 40, prerequisites: ["industrialization", "steam_power"], effects: ["Unlock Nuke (destroys city, 30 gold)"] },
-  { id: "computers", name: "Computers", era: "modern", cost: 34, prerequisites: ["industrialization"], effects: ["All cities +3 research"] },
-  { id: "rocketry", name: "Rocketry", era: "modern", cost: 36, prerequisites: ["flight", "dynamite"], effects: ["Artillery range 2 hexes"] },
-  { id: "modern_armor", name: "Modern Armor", era: "modern", cost: 32, prerequisites: ["industrialization"], effects: ["Tanks → Modern Armor (str 9, move 3)"] },
+  // Era 1
+  { id: "agriculture", name: "农耕", cost: { gold: 5, food: 0, wood: 0, iron: 0 }, prerequisites: [], effects: ["农田产出+50%"] },
+  { id: "logging", name: "伐木", cost: { gold: 5, food: 0, wood: 0, iron: 0 }, prerequisites: [], effects: ["伐木场产出+50%"] },
+  { id: "mining", name: "采矿", cost: { gold: 5, food: 0, wood: 0, iron: 0 }, prerequisites: [], effects: ["解锁矿场"] },
+  { id: "archery", name: "弓术", cost: { gold: 8, food: 0, wood: 3, iron: 0 }, prerequisites: [], effects: ["弓兵攻击+1"] },
+  { id: "horsemanship", name: "骑术", cost: { gold: 8, food: 0, wood: 0, iron: 3 }, prerequisites: [], effects: ["骑兵速度+1"] },
+  // Era 2
+  { id: "iron_working", name: "铁器", cost: { gold: 12, food: 0, wood: 0, iron: 5 }, prerequisites: ["mining"], effects: ["步兵攻防+1"] },
+  { id: "currency", name: "货币", cost: { gold: 10, food: 0, wood: 0, iron: 0 }, prerequisites: ["agriculture"], effects: ["解锁市场"] },
+  { id: "masonry", name: "石工", cost: { gold: 12, food: 0, wood: 5, iron: 5 }, prerequisites: ["mining"], effects: ["解锁要塞, 城墙+1上限"] },
+  { id: "tactics", name: "兵法", cost: { gold: 15, food: 0, wood: 0, iron: 5 }, prerequisites: ["archery", "horsemanship"], effects: ["所有兵种攻击+1"] },
+  // Era 3
+  { id: "steel", name: "钢铁", cost: { gold: 20, food: 0, wood: 0, iron: 15 }, prerequisites: ["iron_working"], effects: ["所有兵种攻防+2"] },
+  { id: "logistics", name: "后勤", cost: { gold: 18, food: 5, wood: 5, iron: 0 }, prerequisites: ["currency", "tactics"], effects: ["行军速度+1, 粮食消耗-30%"] },
+  { id: "siege", name: "攻城术", cost: { gold: 20, food: 0, wood: 10, iron: 10 }, prerequisites: ["masonry", "tactics"], effects: ["攻城伤害+50%"] },
 ];
 
-// === Wonders ===
-
-export interface WonderDef {
-  readonly id: string;
-  readonly name: string;
-  readonly era: TechEra;
-  readonly cost: number;
-  readonly effect: string;
-}
-
-export const WONDER_DEFS: readonly WonderDef[] = [
-  { id: "great_wall", name: "Great Wall", era: "ancient", cost: 15, effect: "All cities +2 defense" },
-  { id: "colossus", name: "Colossus", era: "ancient", cost: 12, effect: "+3 gold per turn" },
-  { id: "pyramids", name: "Pyramids", era: "ancient", cost: 18, effect: "Settlers cost 50% less" },
-  { id: "himeji", name: "Himeji Castle", era: "medieval", cost: 20, effect: "All defending units +1 str" },
-  { id: "machu_picchu", name: "Machu Picchu", era: "medieval", cost: 16, effect: "Mountain tiles +2 gold" },
-  { id: "kremlin", name: "Kremlin", era: "industrial", cost: 25, effect: "Rush production 50% cheaper" },
-  { id: "pentagon", name: "Pentagon", era: "modern", cost: 30, effect: "+2 stacking limit" },
-  { id: "manhattan", name: "Manhattan Project", era: "modern", cost: 35, effect: "Unlock Nukes without Nuclear Fission" },
-];
+// === Starting Resources ===
+export const STARTING_RESOURCES: Resources = { gold: 30, food: 50, wood: 20, iron: 10 };
+export const STARTING_GARRISON: { infantry: number; cavalry: number; archer: number } = { infantry: 300, cavalry: 0, archer: 0 };
+export const STARTING_ARMY_TROOPS: { infantry: number; cavalry: number; archer: number } = { infantry: 200, cavalry: 100, archer: 100 };
 
 // === Tick ===
-
-export const TICK_INTERVAL_MS = 8000;
-export const MAX_ACTIONS_PER_TURN = 5;
+export const TICK_INTERVAL_MS = 5000;

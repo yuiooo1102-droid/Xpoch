@@ -14,11 +14,11 @@ export function checkVictory(state: GameState): FactionId | null {
 /**
  * A faction is alive if it has at least one city.
  * Returns a new GameState with eliminated factions marked alive=false
- * and their units disbanded.
+ * and their armies disbanded.
  */
 export function checkEliminations(state: GameState): GameState {
   const newFactions = new Map(state.factions);
-  let newUnits = new Map(state.units);
+  let newArmies = new Map(state.armies);
   let changed = false;
 
   for (const [factionId, faction] of state.factions) {
@@ -31,19 +31,19 @@ export function checkEliminations(state: GameState): GameState {
     if (!hasCities) {
       newFactions.set(factionId, { ...faction, alive: false });
 
-      // Disband all units belonging to this faction
-      const updatedUnits = new Map(newUnits);
-      for (const [unitId, unit] of newUnits) {
-        if (unit.factionId === factionId) {
-          updatedUnits.delete(unitId);
+      // Disband all armies belonging to this faction
+      const updatedArmies = new Map(newArmies);
+      for (const [armyId, army] of newArmies) {
+        if (army.factionId === factionId) {
+          updatedArmies.delete(armyId);
         }
       }
-      newUnits = updatedUnits;
+      newArmies = updatedArmies;
       changed = true;
     }
   }
 
   if (!changed) return state;
 
-  return { ...state, factions: newFactions, units: newUnits };
+  return { ...state, factions: newFactions, armies: newArmies };
 }

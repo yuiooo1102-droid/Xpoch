@@ -20,7 +20,7 @@ describe("narrate", () => {
 });
 
 describe("generateSummary", () => {
-  it("includes all alive factions with cities and units", () => {
+  it("includes all alive factions with cities and armies", () => {
     const state = createInitialState(5, 42, [
       { id: "f1", name: "Alpha", modelProvider: "mock", color: "#f00" },
       { id: "f2", name: "Beta", modelProvider: "mock", color: "#0f0" },

@@ -2,22 +2,33 @@ import { describe, it, expect } from "vitest";
 import {
   createInitialState,
   getTile,
-  getUnitsAt,
+  getArmiesAt,
   getCityAt,
   getFactionCities,
+  getFactionArmies,
+  getFactionGenerals,
   isFactionAlive,
+  getAvailableGenerals,
   setTile,
-  addUnit,
-  removeUnit,
-  updateUnit,
+  addArmy,
+  removeArmy,
+  updateArmy,
   addCity,
   removeCity,
+  updateCity,
   updateFaction,
+  updateGeneral,
   addLogEntry,
   advanceTick,
 } from "../game-state";
 import type { FactionConfig } from "../game-state";
-import { STARTING_GOLD, STARTING_FOOD, STARTING_TECHS, UNIT_STATS } from "@xpoch/shared";
+import {
+  STARTING_RESOURCES,
+  STARTING_GARRISON,
+  STARTING_ARMY_TROOPS,
+  GENERALS_PER_FACTION,
+} from "@xpoch/shared";
+import { hexKey, hexNeighbors } from "@xpoch/shared";
 
 const TWO_FACTIONS: readonly FactionConfig[] = [
   { id: "f1", name: "Alpha", modelProvider: "mock", color: "#ff0000" },
@@ -44,22 +55,21 @@ describe("createInitialState", () => {
     const state = createInitialState(5, 42, TWO_FACTIONS);
     for (const faction of state.factions.values()) {
       expect(faction.alive).toBe(true);
-      expect(faction.gold).toBe(STARTING_GOLD);
-      expect(faction.food).toBe(STARTING_FOOD);
-      expect(faction.techs).toEqual([...STARTING_TECHS]);
-      expect(faction.research).toBe(0);
+      expect(faction.resources).toEqual(STARTING_RESOURCES);
+      expect(faction.techs).toEqual([]);
     }
   });
 
-  it("creates a capital city for each faction", () => {
+  it("creates a capital city for each faction with garrison", () => {
     const state = createInitialState(5, 42, TWO_FACTIONS);
     expect(state.cities.size).toBe(2);
 
     for (const city of state.cities.values()) {
       expect(city.isCapital).toBe(true);
-      expect(city.hasWalls).toBe(false);
-      expect(city.production).toBe(0);
-      expect(city.currentProject).toBeNull();
+      expect(city.level).toBe(1);
+      expect(city.walls).toBe(0);
+      expect(city.garrison).toEqual(STARTING_GARRISON);
+      expect(city.trainingQueue).toBeNull();
     }
 
     const f1Cities = getFactionCities(state, "f1");
@@ -68,23 +78,50 @@ describe("createInitialState", () => {
     expect(f2Cities).toHaveLength(1);
   });
 
-  it("places 2 infantry + 1 scout for each faction", () => {
+  it("assigns 3 generals per faction with no duplicates", () => {
     const state = createInitialState(5, 42, TWO_FACTIONS);
 
-    for (const cfg of TWO_FACTIONS) {
-      const factionUnits = [...state.units.values()].filter(
-        (u) => u.factionId === cfg.id,
-      );
-      expect(factionUnits).toHaveLength(3);
+    const f1Generals = getFactionGenerals(state, "f1");
+    const f2Generals = getFactionGenerals(state, "f2");
+    expect(f1Generals).toHaveLength(GENERALS_PER_FACTION);
+    expect(f2Generals).toHaveLength(GENERALS_PER_FACTION);
 
-      const infantry = factionUnits.filter((u) => u.type === "infantry");
-      const scouts = factionUnits.filter((u) => u.type === "scout");
-      expect(infantry).toHaveLength(2);
-      expect(scouts).toHaveLength(1);
+    // No duplicate generals across factions
+    const f1Ids = new Set(f1Generals.map((g) => g.id));
+    const f2Ids = new Set(f2Generals.map((g) => g.id));
+    for (const id of f1Ids) {
+      expect(f2Ids.has(id)).toBe(false);
+    }
+
+    // All generals are alive and level 1
+    for (const general of state.generals.values()) {
+      expect(general.alive).toBe(true);
+      expect(general.level).toBe(1);
+      expect(general.exp).toBe(0);
+      expect(general.respawnTick).toBeNull();
     }
   });
 
-  it("marks city center tile with cityId and outskirts with isCityOutskirt", () => {
+  it("creates 1 army per faction led by first general", () => {
+    const state = createInitialState(5, 42, TWO_FACTIONS);
+
+    const f1Armies = getFactionArmies(state, "f1");
+    const f2Armies = getFactionArmies(state, "f2");
+    expect(f1Armies).toHaveLength(1);
+    expect(f2Armies).toHaveLength(1);
+
+    for (const army of state.armies.values()) {
+      expect(army.troops).toEqual(STARTING_ARMY_TROOPS);
+      expect(army.state).toBe("idle");
+      expect(army.target).toBeNull();
+      // General must belong to same faction
+      const general = state.generals.get(army.generalId);
+      expect(general).toBeDefined();
+      expect(general?.factionId).toBe(army.factionId);
+    }
+  });
+
+  it("marks capital tile + neighbors as owned by faction", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
     const city = [...state.cities.values()][0];
     const centerTile = getTile(state, city.coord);
@@ -92,17 +129,17 @@ describe("createInitialState", () => {
     expect(centerTile?.cityId).toBe(city.id);
     expect(centerTile?.owner).toBe("f1");
 
-    // Check that some surrounding tiles are outskirts
-    let outskirtCount = 0;
-    for (const tile of state.tiles.values()) {
-      if (tile.isCityOutskirt === city.id) {
-        outskirtCount++;
-        expect(tile.owner).toBe("f1");
+    // Check surrounding tiles are owned
+    let ownedNeighborCount = 0;
+    const neighbors = hexNeighbors(city.coord);
+    for (const nb of neighbors) {
+      const tile = getTile(state, nb);
+      if (tile && tile.owner === "f1") {
+        ownedNeighborCount++;
       }
     }
-    // Up to 6 outskirts (some may be off-map for edge spawns)
-    expect(outskirtCount).toBeGreaterThanOrEqual(1);
-    expect(outskirtCount).toBeLessThanOrEqual(6);
+    expect(ownedNeighborCount).toBeGreaterThanOrEqual(1);
+    expect(ownedNeighborCount).toBeLessThanOrEqual(6);
   });
 
   it("city center tiles are never water", () => {
@@ -113,25 +150,21 @@ describe("createInitialState", () => {
     }
   });
 
-  it("unit stats match constants", () => {
+  it("faction territoryCount reflects initial territory", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    for (const unit of state.units.values()) {
-      const stats = UNIT_STATS[unit.type];
-      expect(unit.strength).toBe(stats.strength);
-      expect(unit.maxStrength).toBe(stats.strength);
-      expect(unit.movement).toBe(stats.movement);
-      expect(unit.maxMovement).toBe(stats.movement);
-      expect(unit.upgraded).toBe(false);
-    }
+    const faction = state.factions.get("f1")!;
+    // At least 1 (city center), at most 7 (center + 6 neighbors)
+    expect(faction.territoryCount).toBeGreaterThanOrEqual(1);
+    expect(faction.territoryCount).toBeLessThanOrEqual(7);
   });
 
-  it("initializes wonders from WONDER_DEFS", () => {
+  it("getAvailableGenerals excludes generals leading armies", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    expect(state.wonders.length).toBeGreaterThan(0);
-    for (const wonder of state.wonders) {
-      expect(wonder.builtBy).toBeNull();
-      expect(wonder.cityId).toBeNull();
-    }
+    const allGenerals = getFactionGenerals(state, "f1");
+    const available = getAvailableGenerals(state, "f1");
+
+    // 1 general is leading the starting army
+    expect(available).toHaveLength(allGenerals.length - 1);
   });
 });
 
@@ -150,18 +183,18 @@ describe("getTile", () => {
   });
 });
 
-describe("getUnitsAt", () => {
-  it("returns units at a given coordinate", () => {
+describe("getArmiesAt", () => {
+  it("returns armies at a given coordinate", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    const someUnit = [...state.units.values()][0];
-    const found = getUnitsAt(state, someUnit.coord);
+    const someArmy = [...state.armies.values()][0];
+    const found = getArmiesAt(state, someArmy.coord);
     expect(found.length).toBeGreaterThanOrEqual(1);
-    expect(found.some((u) => u.id === someUnit.id)).toBe(true);
+    expect(found.some((a) => a.id === someArmy.id)).toBe(true);
   });
 
-  it("returns empty array for coord with no units", () => {
+  it("returns empty array for coord with no armies", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    const found = getUnitsAt(state, { q: 99, r: 99 });
+    const found = getArmiesAt(state, { q: 99, r: 99 });
     expect(found).toEqual([]);
   });
 });
@@ -189,7 +222,6 @@ describe("isFactionAlive", () => {
 
   it("returns false when faction has no cities", () => {
     let state = createInitialState(5, 42, TWO_FACTIONS);
-    // Remove all f2 cities
     const f2Cities = getFactionCities(state, "f2");
     for (const city of f2Cities) {
       state = removeCity(state, city.id);
@@ -205,7 +237,6 @@ describe("setTile", () => {
     const newState = setTile(state, coord, { owner: "f1" });
 
     expect(getTile(newState, coord)?.owner).toBe("f1");
-    // Original state may or may not have owner depending on spawn
     expect(state.tiles).not.toBe(newState.tiles);
   });
 
@@ -216,54 +247,53 @@ describe("setTile", () => {
   });
 });
 
-describe("addUnit / removeUnit / updateUnit", () => {
-  it("addUnit adds a unit to state", () => {
+describe("addArmy / removeArmy / updateArmy", () => {
+  it("addArmy adds an army to state", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    const newUnit = {
-      id: "test-unit",
-      factionId: "f1",
-      type: "infantry" as const,
+    const newArmy = {
+      id: "test-army",
+      factionId: "f1" as const,
+      generalId: "lubu",
+      troops: { infantry: 100, cavalry: 0, archer: 0 },
       coord: { q: 0, r: 0 },
-      strength: 3,
-      maxStrength: 3,
-      movement: 1,
-      maxMovement: 1,
-      upgraded: false,
+      target: null,
+      state: "idle" as const,
     };
-    const newState = addUnit(state, newUnit);
-    expect(newState.units.get("test-unit")).toEqual(newUnit);
-    expect(state.units.has("test-unit")).toBe(false);
+    const newState = addArmy(state, newArmy);
+    expect(newState.armies.get("test-army")).toEqual(newArmy);
+    expect(state.armies.has("test-army")).toBe(false);
   });
 
-  it("removeUnit removes a unit from state", () => {
+  it("removeArmy removes an army from state", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    const unitId = [...state.units.keys()][0];
-    const newState = removeUnit(state, unitId);
-    expect(newState.units.has(unitId)).toBe(false);
-    expect(state.units.has(unitId)).toBe(true);
+    const armyId = [...state.armies.keys()][0];
+    const newState = removeArmy(state, armyId);
+    expect(newState.armies.has(armyId)).toBe(false);
+    expect(state.armies.has(armyId)).toBe(true);
   });
 
-  it("updateUnit updates unit fields immutably", () => {
+  it("updateArmy updates army fields immutably", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    const unitId = [...state.units.keys()][0];
-    const newState = updateUnit(state, unitId, { strength: 99 });
-    expect(newState.units.get(unitId)?.strength).toBe(99);
-    expect(state.units.get(unitId)?.strength).not.toBe(99);
+    const armyId = [...state.armies.keys()][0];
+    const newState = updateArmy(state, armyId, { state: "marching" });
+    expect(newState.armies.get(armyId)?.state).toBe("marching");
+    expect(state.armies.get(armyId)?.state).toBe("idle");
   });
 });
 
-describe("addCity / removeCity", () => {
+describe("addCity / removeCity / updateCity", () => {
   it("addCity adds a city", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
     const newCity = {
       id: "test-city",
-      factionId: "f1",
+      factionId: "f1" as const,
       name: "Test City",
       coord: { q: 0, r: 0 },
       isCapital: false,
-      hasWalls: false,
-      production: 0,
-      currentProject: null,
+      level: 1,
+      walls: 0,
+      garrison: { infantry: 0, cavalry: 0, archer: 0 },
+      trainingQueue: null,
     };
     const newState = addCity(state, newCity);
     expect(newState.cities.get("test-city")).toEqual(newCity);
@@ -276,14 +306,33 @@ describe("addCity / removeCity", () => {
     expect(newState.cities.has(cityId)).toBe(false);
     expect(state.cities.has(cityId)).toBe(true);
   });
+
+  it("updateCity updates city fields immutably", () => {
+    const state = createInitialState(5, 42, ONE_FACTION);
+    const cityId = [...state.cities.keys()][0];
+    const newState = updateCity(state, cityId, { level: 3 });
+    expect(newState.cities.get(cityId)?.level).toBe(3);
+    expect(state.cities.get(cityId)?.level).toBe(1);
+  });
 });
 
 describe("updateFaction", () => {
   it("updates faction fields immutably", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
-    const newState = updateFaction(state, "f1", { gold: 999 });
-    expect(newState.factions.get("f1")?.gold).toBe(999);
-    expect(state.factions.get("f1")?.gold).toBe(STARTING_GOLD);
+    const newResources = { gold: 999, food: 999, wood: 999, iron: 999 };
+    const newState = updateFaction(state, "f1", { resources: newResources });
+    expect(newState.factions.get("f1")?.resources).toEqual(newResources);
+    expect(state.factions.get("f1")?.resources).toEqual(STARTING_RESOURCES);
+  });
+});
+
+describe("updateGeneral", () => {
+  it("updates general fields immutably", () => {
+    const state = createInitialState(5, 42, ONE_FACTION);
+    const generalId = [...state.generals.keys()][0];
+    const newState = updateGeneral(state, generalId, { level: 5 });
+    expect(newState.generals.get(generalId)?.level).toBe(5);
+    expect(state.generals.get(generalId)?.level).toBe(1);
   });
 });
 
@@ -296,7 +345,6 @@ describe("addLogEntry", () => {
     expect(newState.log[0].category).toBe("system");
     expect(newState.log[0].tick).toBe(0);
     expect(newState.log[0].involvedFactions).toEqual(["f1"]);
-    // Original unchanged
     expect(state.log).toHaveLength(0);
   });
 });

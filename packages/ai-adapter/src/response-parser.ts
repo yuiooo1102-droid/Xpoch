@@ -1,53 +1,64 @@
 import type {
   TurnDecision,
   FactionId,
-  MilitaryOrder,
+  ArmyOrder,
   CityOrder,
+  BuildOrder,
   DiplomacyOrder,
   HexCoord,
+  TroopType,
 } from "@xpoch/shared";
 
-interface RawMilitaryOrder {
-  unit_id?: string;
-  unitId?: string;
+interface RawArmyOrder {
+  general_id?: string;
+  generalId?: string;
   action?: string;
-  to?: string;
+  target?: { q?: number; r?: number } | string;
+  troops?: { infantry?: number; cavalry?: number; archer?: number };
 }
 
 interface RawCityOrder {
   city_id?: string;
   cityId?: string;
   action?: string;
-  unit_type?: string;
-  unitType?: string;
-  target?: string;
+  troop_type?: string;
+  troopType?: string;
+  amount?: number;
+}
+
+interface RawBuildOrder {
+  hex?: { q?: number; r?: number } | string;
   building?: string;
-  hex?: string;
 }
 
 interface RawDiplomacyOrder {
   action?: string;
   target?: string;
   targetFactionId?: string;
+  target_faction_id?: string;
   amount?: number;
 }
 
 interface RawTurnDecision {
-  military?: readonly RawMilitaryOrder[];
+  armies?: readonly RawArmyOrder[];
   cities?: readonly RawCityOrder[];
+  build?: readonly RawBuildOrder[];
   research?: string | null;
   diplomacy?: readonly RawDiplomacyOrder[];
 }
 
-const VALID_MILITARY_ACTIONS = new Set(["move", "attack", "fortify", "disband"]);
-const VALID_CITY_ACTIONS = new Set(["train", "build", "rush", "idle"]);
+const VALID_ARMY_ACTIONS = new Set(["march", "attack", "retreat", "garrison", "idle"]);
+const VALID_CITY_ACTIONS = new Set(["train", "upgrade_walls", "upgrade_city", "idle"]);
 const VALID_DIPLOMACY_ACTIONS = new Set([
   "declare_war",
   "propose_alliance",
   "break_alliance",
   "offer_peace",
-  "demand_tribute",
-  "send_gold",
+  "send_tribute",
+]);
+const VALID_TROOP_TYPES = new Set(["infantry", "cavalry", "archer"]);
+const VALID_BUILDINGS = new Set([
+  "farm", "lumber_mill", "mine", "market", "barracks", "watchtower", "fortress",
 ]);
 
 export function parseAIResponse(
@@ -56,8 +67,9 @@ export function parseAIResponse(
 ): TurnDecision {
   const passDecision: TurnDecision = {
     factionId,
-    military: [],
+    armies: [],
     cities: [],
+    build: [],
     research: null,
     diplomacy: [],
   };
@@ -70,12 +82,13 @@ export function parseAIResponse(
       return passDecision;
     }
 
-    const military = parseMilitaryOrders(parsed.military);
+    const armies = parseArmyOrders(parsed.armies);
     const cities = parseCityOrders(parsed.cities);
+    const build = parseBuildOrders(parsed.build);
     const research = typeof parsed.research === "string" ? parsed.research : null;
     const diplomacy = parseDiplomacyOrders(parsed.diplomacy);
 
-    return { factionId, military, cities, research, diplomacy };
+    return { factionId, armies, cities, build, research, diplomacy };
   } catch {
     return passDecision;
   }
@@ -88,29 +101,29 @@ function stripMarkdownFences(raw: string): string {
     .trim();
 }
 
-function parseMilitaryOrders(
-  raw: readonly RawMilitaryOrder[] | undefined,
-): readonly MilitaryOrder[] {
+function parseArmyOrders(
+  raw: readonly RawArmyOrder[] | undefined,
+): readonly ArmyOrder[] {
   if (!Array.isArray(raw)) return [];
 
   return raw
-    .map(parseSingleMilitaryOrder)
-    .filter((o): o is MilitaryOrder => o !== null);
+    .map(parseSingleArmyOrder)
+    .filter((o): o is ArmyOrder => o !== null);
 }
 
-function parseSingleMilitaryOrder(raw: RawMilitaryOrder): MilitaryOrder | null {
-  const unitId = raw.unit_id ?? raw.unitId;
-  if (!unitId || typeof unitId !== "string") return null;
+function parseSingleArmyOrder(raw: RawArmyOrder): ArmyOrder | null {
+  const generalId = raw.general_id ?? raw.generalId;
+  if (!generalId || typeof generalId !== "string") return null;
 
   const action = raw.action;
-  if (!action || !VALID_MILITARY_ACTIONS.has(action)) return null;
+  if (!action || !VALID_ARMY_ACTIONS.has(action)) return null;
 
-  const to = raw.to ? parseHexCoord(raw.to) : undefined;
+  const target = raw.target ? parseHexCoordFlexible(raw.target) : undefined;
 
   return {
-    unitId,
-    action: action as MilitaryOrder["action"],
-    ...(to !== undefined ? { to } : {}),
+    generalId,
+    action: action as ArmyOrder["action"],
+    ...(target !== undefined ? { target } : {}),
   };
 }
 
@@ -131,14 +144,39 @@ function parseSingleCityOrder(raw: RawCityOrder): CityOrder | null {
   const action = raw.action;
   if (!action || !VALID_CITY_ACTIONS.has(action)) return null;
 
-  const target = raw.unit_type ?? raw.unitType ?? raw.building ?? raw.target;
-  const hex = raw.hex ? parseHexCoord(raw.hex) : undefined;
+  const troopType = raw.troop_type ?? raw.troopType;
+  const validTroopType = troopType && VALID_TROOP_TYPES.has(troopType)
+    ? troopType as TroopType
+    : undefined;
 
   return {
     cityId,
     action: action as CityOrder["action"],
-    ...(target !== undefined ? { target } : {}),
-    ...(hex !== undefined ? { hex } : {}),
+    ...(validTroopType !== undefined ? { troopType: validTroopType } : {}),
+    ...(raw.amount !== undefined ? { amount: raw.amount } : {}),
+  };
+}
+
+function parseBuildOrders(
+  raw: readonly RawBuildOrder[] | undefined,
+): readonly BuildOrder[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map(parseSingleBuildOrder)
+    .filter((o): o is BuildOrder => o !== null);
+}
+
+function parseSingleBuildOrder(raw: RawBuildOrder): BuildOrder | null {
+  const hex = raw.hex ? parseHexCoordFlexible(raw.hex) : undefined;
+  if (!hex) return null;
+
+  const building = raw.building;
+  if (!building || !VALID_BUILDINGS.has(building)) return null;
+
+  return {
+    hex,
+    building: building as BuildOrder["building"],
   };
 }
 
@@ -156,7 +194,7 @@ function parseSingleDiplomacyOrder(raw: RawDiplomacyOrder): DiplomacyOrder | nul
   const action = raw.action;
   if (!action || !VALID_DIPLOMACY_ACTIONS.has(action)) return null;
 
-  const targetFactionId = raw.target ?? raw.targetFactionId;
+  const targetFactionId = raw.target ?? raw.targetFactionId ?? raw.target_faction_id;
   if (!targetFactionId || typeof targetFactionId !== "string") return null;
 
   return {
@@ -166,14 +204,23 @@ function parseSingleDiplomacyOrder(raw: RawDiplomacyOrder): DiplomacyOrder | nul
   };
 }
 
-function parseHexCoord(s: string): HexCoord | undefined {
-  const parts = s.split(",").map((p) => p.trim());
-  if (parts.length !== 2) return undefined;
+function parseHexCoordFlexible(input: { q?: number; r?: number } | string): HexCoord | undefined {
+  if (typeof input === "string") {
+    const parts = input.split(",").map((p) => p.trim());
+    if (parts.length !== 2) return undefined;
+    const q = Number(parts[0]);
+    const r = Number(parts[1]);
+    if (Number.isNaN(q) || Number.isNaN(r)) return undefined;
+    return { q, r };
+  }
 
-  const q = Number(parts[0]);
-  const r = Number(parts[1]);
+  if (typeof input === "object" && input !== null) {
+    const q = input.q;
+    const r = input.r;
+    if (typeof q !== "number" || typeof r !== "number") return undefined;
+    if (Number.isNaN(q) || Number.isNaN(r)) return undefined;
+    return { q, r };
+  }
 
-  if (Number.isNaN(q) || Number.isNaN(r)) return undefined;
-
-  return { q, r };
+  return undefined;
 }

@@ -1,15 +1,15 @@
-import type { GameState, FactionId, TurnDecision, MilitaryOrder } from "@xpoch/shared";
+import type { GameState, FactionId, TurnDecision, ArmyOrder } from "@xpoch/shared";
 
 /**
- * Build short ID → real ID mappings for units and cities.
- * Prompt uses u0, u1... for units and real city IDs.
+ * Build short ID -> real ID mappings for armies.
+ * Prompt uses a0, a1... for armies and real city IDs.
  */
 export function buildIdMap(state: GameState, factionId: FactionId): ReadonlyMap<string, string> {
   const map = new Map<string, string>();
   let i = 0;
-  for (const unit of state.units.values()) {
-    if (unit.factionId === factionId) {
-      map.set(`u${i}`, unit.id);
+  for (const army of state.armies.values()) {
+    if (army.factionId === factionId) {
+      map.set(`a${i}`, army.generalId);
       i++;
     }
   }
@@ -17,13 +17,13 @@ export function buildIdMap(state: GameState, factionId: FactionId): ReadonlyMap<
 }
 
 /**
- * Remap short IDs in a TurnDecision back to real IDs.
+ * Remap short IDs in a TurnDecision back to real general IDs.
  */
 export function remapIds(decision: TurnDecision, idMap: ReadonlyMap<string, string>): TurnDecision {
-  const military: MilitaryOrder[] = decision.military.map((o) => ({
+  const armies: readonly ArmyOrder[] = decision.armies.map((o) => ({
     ...o,
-    unitId: idMap.get(o.unitId) ?? o.unitId, // fallback to original if not in map
+    generalId: idMap.get(o.generalId) ?? o.generalId,
   }));
 
-  return { ...decision, military };
+  return { ...decision, armies };
 }

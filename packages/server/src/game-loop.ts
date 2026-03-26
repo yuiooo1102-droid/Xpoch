@@ -1,5 +1,17 @@
 import type { GameState, FactionId, AIAdapter, TurnDecision } from "@xpoch/shared";
-import { executeTurnDecision, processEconomy, processCityProduction, autoFoundCities, checkVictory, checkEliminations, advanceTick, addLogEntry } from "@xpoch/engine";
+import {
+  executeTurnDecision,
+  processMarches,
+  expandTerritory,
+  validateConnectivity,
+  updateTerritoryCounts,
+  processEconomy,
+  processRespawns,
+  checkVictory,
+  checkEliminations,
+  advanceTick,
+  addLogEntry,
+} from "@xpoch/engine";
 
 export class GameLoop {
   private state: GameState;
@@ -61,16 +73,30 @@ export class GameLoop {
     const allDecisions = await Promise.all(decisionPromises);
 
     let newState = this.state;
+
+    // Execute all faction decisions (armies, cities, build, research, diplomacy)
     for (const decision of allDecisions) {
       newState = executeTurnDecision(newState, decision);
     }
 
-    newState = autoFoundCities(newState);
-    newState = processCityProduction(newState);
+    // Process marches (move armies toward targets)
+    newState = processMarches(newState);
+
+    // Territory: expand, validate connectivity, update counts
+    newState = expandTerritory(newState);
+    newState = validateConnectivity(newState);
+    newState = updateTerritoryCounts(newState);
+
+    // Economy: income, upkeep, starvation, training queues
     newState = processEconomy(newState);
+
+    // General respawns
+    newState = processRespawns(newState);
+
+    // Eliminations
     newState = checkEliminations(newState);
 
-    // Check victory after eliminations so last-tick kills produce a winner
+    // Check victory after eliminations
     const postWinner = checkVictory(newState);
     if (postWinner) {
       newState = { ...newState, winner: postWinner };
@@ -108,8 +134,9 @@ export class GameLoop {
 function emptyDecision(factionId: FactionId): TurnDecision {
   return {
     factionId,
-    military: [],
+    armies: [],
     cities: [],
+    build: [],
     research: null,
     diplomacy: [],
   };

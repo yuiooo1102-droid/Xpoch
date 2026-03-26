@@ -1,201 +1,259 @@
-import type { Unit, UnitType } from "@xpoch/shared";
-import { TRUMP } from "@xpoch/shared";
+import type { Troops, GeneralDef, TroopType } from "@xpoch/shared";
+import { TROOP_STATS, TRUMP_MAP, TRUMP_BONUS } from "@xpoch/shared";
 
-export interface CombatResult {
+// === Types ===
+
+export interface BattleResult {
   readonly attackerWins: boolean;
-  readonly survivingAttackers: readonly Unit[];
-  readonly survivingDefenders: readonly Unit[];
-  readonly attackerLosses: readonly Unit[];
-  readonly defenderLosses: readonly Unit[];
+  readonly attackerLosses: Troops;
+  readonly defenderLosses: Troops;
+  readonly attackerRemaining: Troops;
+  readonly defenderRemaining: Troops;
+  readonly expGained: number;
   readonly log: readonly string[];
 }
 
-interface MatchupResult {
-  readonly attackerSurvived: boolean;
-  readonly defenderSurvived: boolean;
-  readonly attackerDamage: number;
-  readonly defenderDamage: number;
-  readonly logEntry: string;
+// === Constants ===
+
+const TROOP_TYPES: readonly TroopType[] = ["infantry", "cavalry", "archer"];
+const BASE_LOSS_RATE = 0.3;
+const MIN_LOSS_RATE = 0.1;
+
+// === Helpers ===
+
+export function totalTroops(troops: Troops): number {
+  return troops.infantry + troops.cavalry + troops.archer;
 }
 
-function hasTrumpOver(attackerType: UnitType, defenderType: UnitType): boolean {
-  return TRUMP[attackerType] === defenderType;
+function troopPowerForType(
+  type: TroopType,
+  count: number,
+  generalAttackBonus: number,
+  enemyTroops: Troops,
+): number {
+  if (count <= 0) return 0;
+
+  const stats = TROOP_STATS[type];
+  const basePower = count * stats.attack * (1 + generalAttackBonus);
+
+  const trumpTarget = TRUMP_MAP[type];
+  const enemyTotal = totalTroops(enemyTroops);
+  if (enemyTotal <= 0) return basePower;
+
+  const trumpedPortion = enemyTroops[trumpTarget] / enemyTotal;
+  const normalPortion = 1 - trumpedPortion;
+  const effectiveMultiplier = normalPortion + trumpedPortion * TRUMP_BONUS;
+
+  return basePower * effectiveMultiplier;
 }
 
-function resolveMatchup(attacker: Unit, defender: Unit): MatchupResult {
-  const atkStr = attacker.strength;
-  const defStr = defender.strength;
+function troopDefenseForType(
+  type: TroopType,
+  count: number,
+  generalDefenseBonus: number,
+): number {
+  if (count <= 0) return 0;
+  const stats = TROOP_STATS[type];
+  return count * stats.defense * (1 + generalDefenseBonus);
+}
 
-  const attackerTrumps = hasTrumpOver(attacker.type, defender.type);
-  const defenderTrumps = hasTrumpOver(defender.type, attacker.type);
+export function calculatePower(
+  troops: Troops,
+  general: GeneralDef | null,
+  trumpTarget: Troops,
+): number {
+  const attackBonus = general ? general.baseAttack / 100 : 0;
 
-  let attackerDamageTaken: number;
-  let defenderDamageTaken: number;
+  return TROOP_TYPES.reduce(
+    (sum, type) =>
+      sum + troopPowerForType(type, troops[type], attackBonus, trumpTarget),
+    0,
+  );
+}
 
-  if (attackerTrumps) {
-    // Attacker deals damage first
-    defenderDamageTaken = atkStr;
-    const defenderDies = defenderDamageTaken >= defStr;
-    attackerDamageTaken = defenderDies ? 0 : defStr;
-  } else if (defenderTrumps) {
-    // Defender deals damage first
-    attackerDamageTaken = defStr;
-    const attackerDies = attackerDamageTaken >= atkStr;
-    defenderDamageTaken = attackerDies ? 0 : atkStr;
-  } else {
-    // Simultaneous damage
-    attackerDamageTaken = defStr;
-    defenderDamageTaken = atkStr;
-  }
+function calculateDefense(
+  troops: Troops,
+  general: GeneralDef | null,
+  terrainDefense: number,
+  cityDefense: number,
+): number {
+  const defenseBonus = general ? general.baseDefense / 100 : 0;
 
-  const attackerSurvived = attackerDamageTaken < atkStr;
-  const defenderSurvived = defenderDamageTaken < defStr;
+  const troopDef = TROOP_TYPES.reduce(
+    (sum, type) => sum + troopDefenseForType(type, troops[type], defenseBonus),
+    0,
+  );
 
-  const trumpNote = attackerTrumps
-    ? ` (${attacker.type} trumps ${defender.type})`
-    : defenderTrumps
-      ? ` (${defender.type} trumps ${attacker.type})`
-      : "";
+  const count = totalTroops(troops);
+  return troopDef + (count > 0 ? terrainDefense + cityDefense : 0);
+}
 
-  const logEntry =
-    `${attacker.type}[str=${atkStr}] vs ${defender.type}[str=${defStr}]${trumpNote}: ` +
-    `attacker ${attackerSurvived ? "survives" : "killed"}, ` +
-    `defender ${defenderSurvived ? "survives" : "killed"}`;
-
+function computeLosses(
+  troops: Troops,
+  lossRate: number,
+): Troops {
+  const clampedRate = Math.max(MIN_LOSS_RATE, Math.min(1, lossRate));
   return {
-    attackerSurvived,
-    defenderSurvived,
-    attackerDamage: attackerDamageTaken,
-    defenderDamage: defenderDamageTaken,
-    logEntry,
+    infantry: Math.round(troops.infantry * clampedRate),
+    cavalry: Math.round(troops.cavalry * clampedRate),
+    archer: Math.round(troops.archer * clampedRate),
   };
 }
 
-function sortByStrengthDesc(units: readonly Unit[]): readonly Unit[] {
-  return [...units].sort((a, b) => b.strength - a.strength);
+function subtractTroops(a: Troops, b: Troops): Troops {
+  return {
+    infantry: Math.max(0, a.infantry - b.infantry),
+    cavalry: Math.max(0, a.cavalry - b.cavalry),
+    archer: Math.max(0, a.archer - b.archer),
+  };
 }
 
-/**
- * Resolve combat between attacking and defending units at a hex.
- *
- * Rules:
- * 1. Units are matched 1v1 from strongest to weakest
- * 2. Trump advantage: if A trumps B, A deals damage first. If A kills B, A takes 0 damage.
- *    (infantry trumps cavalry, cavalry trumps artillery, artillery trumps infantry)
- * 3. Both sides deal damage = their strength simultaneously (unless trumped dead first)
- * 4. Unit dies when damage >= strength
- * 5. After all matchups, side with more surviving total strength wins
- * 6. Tie -> defender wins
- *
- * @param attackers - attacking units
- * @param defenders - defending units
- * @param terrainDefenseBonus - from terrain (forest +1, mountain +2 per unit)
- * @param cityDefenseBonus - from city (+4) or capital (+8) or walls (+4 more)
- */
-export function resolveCombat(
-  attackers: readonly Unit[],
-  defenders: readonly Unit[],
-  terrainDefenseBonus: number,
-  cityDefenseBonus: number,
-): CombatResult {
-  if (attackers.length === 0) {
-    return {
-      attackerWins: false,
-      survivingAttackers: [],
-      survivingDefenders: [...defenders],
-      attackerLosses: [],
-      defenderLosses: [],
-      log: ["No attackers present — defender wins by default."],
-    };
-  }
+// === Main ===
 
-  if (defenders.length === 0) {
-    return {
-      attackerWins: true,
-      survivingAttackers: [...attackers],
-      survivingDefenders: [],
-      attackerLosses: [],
-      defenderLosses: [],
-      log: ["No defenders present — attacker wins by default."],
-    };
-  }
-
-  const sortedAttackers = sortByStrengthDesc(attackers);
-  const sortedDefenders = sortByStrengthDesc(defenders);
-
-  const survivingAttackers: Unit[] = [];
-  const survivingDefenders: Unit[] = [];
-  const attackerLosses: Unit[] = [];
-  const defenderLosses: Unit[] = [];
+export function resolveBattle(
+  attacker: { readonly troops: Troops; readonly general: GeneralDef | null },
+  defender: {
+    readonly troops: Troops;
+    readonly general: GeneralDef | null;
+    readonly garrison?: Troops;
+  },
+  terrainDefense: number,
+  cityDefense: number,
+): BattleResult {
   const log: string[] = [];
 
-  const matchCount = Math.max(sortedAttackers.length, sortedDefenders.length);
+  // Combine defender troops with garrison
+  const defenderTroops: Troops = defender.garrison
+    ? {
+        infantry: defender.troops.infantry + defender.garrison.infantry,
+        cavalry: defender.troops.cavalry + defender.garrison.cavalry,
+        archer: defender.troops.archer + defender.garrison.archer,
+      }
+    : defender.troops;
 
-  for (let i = 0; i < matchCount; i++) {
-    const attacker: Unit | undefined = sortedAttackers[i];
-    const defender: Unit | undefined = sortedDefenders[i];
+  const atkTotal = totalTroops(attacker.troops);
+  const defTotal = totalTroops(defenderTroops);
 
-    if (attacker === undefined && defender !== undefined) {
-      // Extra defender with no opponent — survives
-      survivingDefenders.push(defender);
-      log.push(`${defender.type}[str=${defender.strength}] has no opponent — survives.`);
-      continue;
-    }
-
-    if (defender === undefined && attacker !== undefined) {
-      // Extra attacker with no opponent — survives
-      survivingAttackers.push(attacker);
-      log.push(`${attacker.type}[str=${attacker.strength}] has no opponent — survives.`);
-      continue;
-    }
-
-    if (attacker === undefined || defender === undefined) {
-      continue;
-    }
-
-    const result = resolveMatchup(attacker, defender);
-    log.push(result.logEntry);
-
-    if (result.attackerSurvived) {
-      survivingAttackers.push(attacker);
-    } else {
-      attackerLosses.push(attacker);
-    }
-
-    if (result.defenderSurvived) {
-      survivingDefenders.push(defender);
-    } else {
-      defenderLosses.push(defender);
-    }
+  // Edge case: no troops
+  if (atkTotal === 0 && defTotal === 0) {
+    return {
+      attackerWins: false,
+      attackerLosses: { infantry: 0, cavalry: 0, archer: 0 },
+      defenderLosses: { infantry: 0, cavalry: 0, archer: 0 },
+      attackerRemaining: { infantry: 0, cavalry: 0, archer: 0 },
+      defenderRemaining: { infantry: 0, cavalry: 0, archer: 0 },
+      expGained: 0,
+      log: ["No troops on either side — no battle."],
+    };
   }
 
-  // Determine winner based on surviving total strength
-  const attackerTotalStrength = survivingAttackers.reduce(
-    (sum, u) => sum + u.strength,
-    0,
-  );
-  // City/terrain bonuses only apply while defenders still hold the position
-  const hasDefenders = survivingDefenders.length > 0;
-  const defenderTotalStrength =
-    survivingDefenders.reduce((sum, u) => sum + u.strength, 0) +
-    (hasDefenders ? terrainDefenseBonus * survivingDefenders.length : 0) +
-    (hasDefenders ? cityDefenseBonus : 0);
+  if (atkTotal === 0) {
+    return {
+      attackerWins: false,
+      attackerLosses: { infantry: 0, cavalry: 0, archer: 0 },
+      defenderLosses: { infantry: 0, cavalry: 0, archer: 0 },
+      attackerRemaining: { infantry: 0, cavalry: 0, archer: 0 },
+      defenderRemaining: defenderTroops,
+      expGained: 0,
+      log: ["No attackers — defender wins by default."],
+    };
+  }
 
-  const attackerWins = attackerTotalStrength > defenderTotalStrength;
+  if (defTotal === 0) {
+    return {
+      attackerWins: true,
+      attackerLosses: { infantry: 0, cavalry: 0, archer: 0 },
+      defenderLosses: { infantry: 0, cavalry: 0, archer: 0 },
+      attackerRemaining: attacker.troops,
+      defenderRemaining: { infantry: 0, cavalry: 0, archer: 0 },
+      expGained: 0,
+      log: ["No defenders — attacker wins by default."],
+    };
+  }
+
+  // Calculate power and defense
+  const atkPower = calculatePower(
+    attacker.troops,
+    attacker.general,
+    defenderTroops,
+  );
+  const defPower = calculatePower(
+    defenderTroops,
+    defender.general,
+    attacker.troops,
+  );
+
+  const atkDefense = calculateDefense(attacker.troops, attacker.general, 0, 0);
+  const defDefense = calculateDefense(
+    defenderTroops,
+    defender.general,
+    terrainDefense,
+    cityDefense,
+  );
 
   log.push(
-    `Result: attacker strength=${attackerTotalStrength}, ` +
-    `defender strength=${defenderTotalStrength} ` +
-    `(terrain bonus=${terrainDefenseBonus}/unit, city bonus=${cityDefenseBonus}) — ` +
-    `${attackerWins ? "attacker" : "defender"} wins.`,
+    `Attacker: ${atkTotal} troops (inf=${attacker.troops.infantry}, cav=${attacker.troops.cavalry}, arc=${attacker.troops.archer}), power=${atkPower.toFixed(1)}, defense=${atkDefense.toFixed(1)}`,
   );
+  log.push(
+    `Defender: ${defTotal} troops (inf=${defenderTroops.infantry}, cav=${defenderTroops.cavalry}, arc=${defenderTroops.archer}), power=${defPower.toFixed(1)}, defense=${defDefense.toFixed(1)}`,
+  );
+
+  if (terrainDefense > 0) {
+    log.push(`Terrain defense bonus: +${terrainDefense}`);
+  }
+  if (cityDefense > 0) {
+    log.push(`City defense bonus: +${cityDefense}`);
+  }
+
+  // Calculate losses: base loss rate = 30% × opposing power / own defense
+  const atkLossRate =
+    defDefense > 0 ? BASE_LOSS_RATE * (defPower / atkDefense) : MIN_LOSS_RATE;
+  const defLossRate =
+    atkDefense > 0 ? BASE_LOSS_RATE * (atkPower / defDefense) : MIN_LOSS_RATE;
+
+  const attackerLosses = computeLosses(attacker.troops, atkLossRate);
+  const defenderLosses = computeLosses(defenderTroops, defLossRate);
+
+  const attackerRemaining = subtractTroops(attacker.troops, attackerLosses);
+  const defenderRemaining = subtractTroops(defenderTroops, defenderLosses);
+
+  log.push(
+    `Attacker losses: inf=${attackerLosses.infantry}, cav=${attackerLosses.cavalry}, arc=${attackerLosses.archer} (rate=${(Math.max(MIN_LOSS_RATE, Math.min(1, atkLossRate)) * 100).toFixed(1)}%)`,
+  );
+  log.push(
+    `Defender losses: inf=${defenderLosses.infantry}, cav=${defenderLosses.cavalry}, arc=${defenderLosses.archer} (rate=${(Math.max(MIN_LOSS_RATE, Math.min(1, defLossRate)) * 100).toFixed(1)}%)`,
+  );
+
+  // Winner = side with more remaining total power
+  const atkRemainingPower = calculatePower(
+    attackerRemaining,
+    attacker.general,
+    defenderRemaining,
+  );
+  const defRemainingPower = calculatePower(
+    defenderRemaining,
+    defender.general,
+    attackerRemaining,
+  );
+
+  const attackerWins = atkRemainingPower > defRemainingPower;
+
+  log.push(
+    `Remaining — attacker power=${atkRemainingPower.toFixed(1)}, defender power=${defRemainingPower.toFixed(1)} — ${attackerWins ? "attacker" : "defender"} wins.`,
+  );
+
+  // Exp gained by winning general = total enemy losses
+  const expGained = attackerWins
+    ? totalTroops(defenderLosses)
+    : totalTroops(attackerLosses);
 
   return {
     attackerWins,
-    survivingAttackers,
-    survivingDefenders,
     attackerLosses,
     defenderLosses,
+    attackerRemaining,
+    defenderRemaining,
+    expGained,
     log,
   };
 }

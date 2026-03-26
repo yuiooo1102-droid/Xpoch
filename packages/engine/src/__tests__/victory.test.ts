@@ -67,10 +67,10 @@ describe("checkEliminations", () => {
     state = { ...state, cities };
 
     const result = checkEliminations(state);
-    const f2Units = [...result.units.values()].filter(
-      (u) => u.factionId === "f2",
+    const f2Armies = [...result.armies.values()].filter(
+      (a) => a.factionId === "f2",
     );
-    expect(f2Units).toHaveLength(0);
+    expect(f2Armies).toHaveLength(0);
   });
 
   it("does not affect factions that still have cities", () => {

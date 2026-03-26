@@ -15,21 +15,22 @@ describe("buildPrompt", () => {
 
   it("includes action types", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("move");
+    expect(prompt).toContain("march");
     expect(prompt).toContain("attack");
     expect(prompt).toContain("train");
-    expect(prompt).toContain("build");
   });
 
-  it("includes gold and food in compact format", () => {
+  it("includes resources in compact format", () => {
     const prompt = buildPrompt(state, "f1");
     expect(prompt).toContain("G:");
     expect(prompt).toContain("F:");
+    expect(prompt).toContain("W:");
+    expect(prompt).toContain("I:");
   });
 
-  it("includes research info in compact format", () => {
+  it("includes territory count", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("R:");
+    expect(prompt).toContain("Terr:");
   });
 
   it("includes JSON format instruction", () => {
@@ -43,12 +44,17 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("Alpha Capital");
   });
 
-  it("includes unit info with short IDs", () => {
+  it("includes generals info", () => {
     const prompt = buildPrompt(state, "f1");
-    expect(prompt).toContain("UNITS");
-    expect(prompt).toContain("infantry");
-    expect(prompt).toContain("scout");
-    expect(prompt).toContain("u0");
+    expect(prompt).toContain("GENERALS");
+  });
+
+  it("includes army info", () => {
+    const prompt = buildPrompt(state, "f1");
+    expect(prompt).toContain("ARMIES");
+    expect(prompt).toContain("inf:");
+    expect(prompt).toContain("cav:");
+    expect(prompt).toContain("arc:");
   });
 
   it("includes tech info", () => {

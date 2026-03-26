@@ -1,18 +1,17 @@
 /**
- * Xpoch Test Battle — Run a full AI game headlessly and produce a report.
- *
- * Usage: npx tsx scripts/test-battle.ts [ticks=50]
- *
- * Runs 3 mock AI factions for N ticks, then outputs a structured JSON report
- * to stdout for the reviewer to analyze.
+ * Xpoch Test Battle v3 — Run a full AI game headlessly and produce a report.
+ * Usage: npx tsx scripts/test-battle.ts [ticks=60]
  */
 
 import { createInitialState } from "@xpoch/engine";
 import {
   executeTurnDecision,
   processEconomy,
-  processCityProduction,
-  autoFoundCities,
+  processMarches,
+  expandTerritory,
+  validateConnectivity,
+  updateTerritoryCounts,
+  processRespawns,
   checkVictory,
   checkEliminations,
   advanceTick,
@@ -21,7 +20,7 @@ import {
 import { MockAdapter } from "@xpoch/ai-adapter";
 import type { GameState, FactionId, TurnDecision } from "@xpoch/shared";
 
-const MAX_TICKS = parseInt(process.argv[2] ?? "50", 10);
+const MAX_TICKS = parseInt(process.argv[2] ?? "60", 10);
 
 const FACTIONS = [
   { id: "faction_0", name: "Claude Legion", modelProvider: "mock", color: "#8B5CF6" },
@@ -38,14 +37,13 @@ interface TickSnapshot {
   factions: Record<string, {
     alive: boolean;
     cities: number;
-    units: number;
-    unitBreakdown: Record<string, number>;
-    totalStrength: number;
-    gold: number;
-    food: number;
-    research: number;
+    armies: number;
+    totalTroops: number;
+    troopBreakdown: { infantry: number; cavalry: number; archer: number };
+    generals: { alive: number; dead: number };
+    territory: number;
+    resources: { gold: number; food: number; wood: number; iron: number };
     techCount: number;
-    techs: string[];
     buildings: Record<string, number>;
   }>;
   events: string[];
@@ -53,11 +51,10 @@ interface TickSnapshot {
 }
 
 async function runBattle(): Promise<void> {
-  let state = createInitialState(10, Date.now(), FACTIONS);
+  let state = createInitialState(12, Date.now(), FACTIONS);
   const snapshots: TickSnapshot[] = [];
-  const allEvents: string[] = [];
 
-  console.error(`Starting test battle: ${MAX_TICKS} ticks, 3 factions, map radius 10`);
+  console.error(`Starting v3 test battle: ${MAX_TICKS} ticks, 3 factions, map radius 12`);
 
   for (let t = 0; t < MAX_TICKS; t++) {
     // Check victory
@@ -72,7 +69,6 @@ async function runBattle(): Promise<void> {
     // Collect AI decisions
     const aliveFactions = [...state.factions.values()].filter((f) => f.alive);
     const decisions: TurnDecision[] = [];
-
     for (const faction of aliveFactions) {
       const adapter = adapters.get(faction.id);
       if (!adapter) continue;
@@ -80,21 +76,23 @@ async function runBattle(): Promise<void> {
         decisions.push(await adapter.decideActions(state, faction.id));
       } catch (err) {
         console.error(`AI error for ${faction.name}:`, err);
-        decisions.push({ factionId: faction.id, military: [], cities: [], research: null, diplomacy: [] });
+        decisions.push({ factionId: faction.id, armies: [], cities: [], build: [], research: null, diplomacy: [] });
       }
     }
 
-    // Execute
+    // Execute v3 pipeline
     const logBefore = state.log.length;
     for (const d of decisions) {
       state = executeTurnDecision(state, d);
     }
-    state = autoFoundCities(state);
-    state = processCityProduction(state);
+    state = processMarches(state);
+    state = expandTerritory(state);
+    state = validateConnectivity(state);
+    state = updateTerritoryCounts(state);
     state = processEconomy(state);
+    state = processRespawns(state);
     state = checkEliminations(state);
 
-    // Check victory after eliminations (so last-tick eliminations produce a winner)
     const postWinner = checkVictory(state);
     if (postWinner) {
       state = { ...state, winner: postWinner };
@@ -103,11 +101,7 @@ async function runBattle(): Promise<void> {
 
     state = advanceTick(state);
 
-    // Collect new events
-    const newEvents = state.log.slice(logBefore).map((e) => `[T${e.tick}][${e.category}] ${e.message}`);
-    allEvents.push(...newEvents);
-
-    // Snapshot every 5 ticks or on last tick
+    // Snapshot every 5 ticks
     if (t % 5 === 0 || t === MAX_TICKS - 1 || state.winner) {
       snapshots.push(buildSnapshot(state));
     }
@@ -115,21 +109,20 @@ async function runBattle(): Promise<void> {
     if (state.winner) break;
   }
 
-  // Build report
   const report = {
-    config: { maxTicks: MAX_TICKS, mapRadius: 10, factions: FACTIONS.map((f) => f.name) },
+    config: { maxTicks: MAX_TICKS, mapRadius: 12, factions: FACTIONS.map((f) => f.name) },
     finalTick: state.tick,
     winner: state.winner ? state.factions.get(state.winner)?.name ?? state.winner : null,
     snapshots,
     totalEvents: state.log.length,
     eventsByCategory: categorizeEvents(state),
-    combatEvents: state.log.filter((e) => e.message.includes("battle") || e.message.includes("captured")).map(
+    combatEvents: state.log.filter((e) => e.message.toLowerCase().includes("battle") || e.message.toLowerCase().includes("captured")).map(
+      (e) => `[T${e.tick}] ${e.message}`
+    ),
+    territoryEvents: state.log.filter((e) => e.category === "territory").map(
       (e) => `[T${e.tick}] ${e.message}`
     ),
     techEvents: state.log.filter((e) => e.category === "tech").map(
-      (e) => `[T${e.tick}] ${e.message}`
-    ),
-    cityEvents: state.log.filter((e) => e.category === "city").map(
       (e) => `[T${e.tick}] ${e.message}`
     ),
     systemErrors: state.log.filter((e) => e.category === "system" && e.message.includes("Invalid")).map(
@@ -146,33 +139,39 @@ function buildSnapshot(state: GameState): TickSnapshot {
 
   for (const [fid, f] of state.factions) {
     const cities = [...state.cities.values()].filter((c) => c.factionId === fid);
-    const units = [...state.units.values()].filter((u) => u.factionId === fid);
-    const unitBreakdown: Record<string, number> = {};
-    for (const u of units) {
-      unitBreakdown[u.type] = (unitBreakdown[u.type] ?? 0) + 1;
+    const armies = [...state.armies.values()].filter((a) => a.factionId === fid);
+    const generals = [...state.generals.values()].filter((g) => g.factionId === fid);
+
+    let totalInf = 0, totalCav = 0, totalArc = 0;
+    for (const a of armies) {
+      totalInf += a.troops.infantry;
+      totalCav += a.troops.cavalry;
+      totalArc += a.troops.archer;
     }
+    // Add garrison troops
+    for (const c of cities) {
+      totalInf += c.garrison.infantry;
+      totalCav += c.garrison.cavalry;
+      totalArc += c.garrison.archer;
+    }
+
     const buildings: Record<string, number> = {};
     for (const t of state.tiles.values()) {
-      if (t.building && (t.isCityOutskirt || t.cityId)) {
-        const cid = t.isCityOutskirt ?? t.cityId;
-        const city = cid ? state.cities.get(cid) : null;
-        if (city?.factionId === fid) {
-          buildings[t.building] = (buildings[t.building] ?? 0) + 1;
-        }
+      if (t.building && t.owner === fid) {
+        buildings[t.building] = (buildings[t.building] ?? 0) + 1;
       }
     }
 
     factions[f.name] = {
       alive: f.alive,
       cities: cities.length,
-      units: units.length,
-      unitBreakdown,
-      totalStrength: units.reduce((s, u) => s + u.strength, 0),
-      gold: f.gold,
-      food: f.food,
-      research: f.research,
+      armies: armies.length,
+      totalTroops: totalInf + totalCav + totalArc,
+      troopBreakdown: { infantry: totalInf, cavalry: totalCav, archer: totalArc },
+      generals: { alive: generals.filter((g) => g.alive).length, dead: generals.filter((g) => !g.alive).length },
+      territory: f.territoryCount,
+      resources: { ...f.resources },
       techCount: f.techs.length,
-      techs: [...f.techs],
       buildings,
     };
   }
@@ -196,61 +195,39 @@ function categorizeEvents(state: GameState): Record<string, number> {
 function detectIssues(state: GameState, snapshots: TickSnapshot[]): string[] {
   const issues: string[] = [];
 
-  // Issue: game ended too fast (< 15 ticks)
   if (state.tick < 15 && state.winner) {
-    issues.push(`GAME_TOO_SHORT: Game ended in ${state.tick} ticks — not enough strategic depth`);
+    issues.push(`GAME_TOO_SHORT: Game ended in ${state.tick} ticks`);
   }
-
-  // Issue: game never ended (no winner after MAX_TICKS)
   if (!state.winner && state.tick >= MAX_TICKS) {
-    issues.push(`STALEMATE: No winner after ${MAX_TICKS} ticks — AI may be stuck or too passive`);
+    issues.push(`STALEMATE: No winner after ${MAX_TICKS} ticks`);
   }
 
-  // Issue: faction had 0 units for extended period
   for (const snap of snapshots) {
     for (const [name, f] of Object.entries(snap.factions)) {
-      if (f.alive && f.units === 0 && snap.tick > 5) {
-        issues.push(`NO_UNITS: ${name} has 0 units at tick ${snap.tick} — training broken or starvation`);
+      if (f.alive && f.armies === 0 && f.totalTroops === 0 && snap.tick > 10) {
+        issues.push(`NO_TROOPS: ${name} has 0 troops at tick ${snap.tick}`);
       }
     }
   }
 
-  // Issue: no battles occurred
-  const battleCount = state.log.filter((e) => e.message.includes("battle")).length;
+  const battleCount = state.log.filter((e) => e.message.toLowerCase().includes("battle")).length;
   if (battleCount === 0 && state.tick > 20) {
-    issues.push(`NO_COMBAT: Zero battles after ${state.tick} ticks — AI not attacking`);
+    issues.push(`NO_COMBAT: Zero battles after ${state.tick} ticks`);
   }
 
-  // Issue: no tech researched
-  for (const f of state.factions.values()) {
-    if (f.alive && f.techs.length <= 1 && state.tick > 15) {
-      issues.push(`NO_TECH: ${f.name} only has ${f.techs.length} tech at tick ${state.tick} — research broken`);
-    }
-  }
-
-  // Issue: no buildings built
-  const totalBuildings = [...state.tiles.values()].filter((t) => t.building).length;
-  if (totalBuildings === 0 && state.tick > 10) {
-    issues.push(`NO_BUILDINGS: Zero buildings at tick ${state.tick} — city production broken`);
-  }
-
-  // Issue: excessive gold hoarding (> 200)
-  for (const f of state.factions.values()) {
-    if (f.alive && f.gold > 200) {
-      issues.push(`GOLD_HOARDING: ${f.name} has ${f.gold} gold — AI not spending resources`);
-    }
-  }
-
-  // Issue: too many system errors
   const errorCount = state.log.filter((e) => e.category === "system" && e.message.includes("Invalid")).length;
   if (errorCount > 20) {
-    issues.push(`EXCESSIVE_ERRORS: ${errorCount} invalid action errors — AI sending bad commands`);
+    issues.push(`EXCESSIVE_ERRORS: ${errorCount} invalid action errors`);
   }
 
-  // Issue: one faction dominates too early
-  if (state.winner && state.tick < 20) {
-    const winnerFaction = state.factions.get(state.winner);
-    issues.push(`SNOWBALL: ${winnerFaction?.name} won at tick ${state.tick} — early game imbalance`);
+  // Check territory expansion
+  const lastSnap = snapshots[snapshots.length - 1];
+  if (lastSnap) {
+    for (const [name, f] of Object.entries(lastSnap.factions)) {
+      if (f.alive && f.territory <= 7 && lastSnap.tick > 15) {
+        issues.push(`NO_EXPANSION: ${name} only has ${f.territory} territory at tick ${lastSnap.tick}`);
+      }
+    }
   }
 
   return issues;
