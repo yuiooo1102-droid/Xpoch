@@ -199,6 +199,10 @@ function completeProject(state: GameState, cityId: CityId): GameState {
       if (availableTile !== undefined) {
         s = setTile(s, availableTile.coord, { building: buildingType });
       }
+      // If building city_walls, mark the city as having walls
+      if (buildingType === "city_walls") {
+        s = updateCity(s, cityId, { hasWalls: true });
+      }
       s = addLogEntry(
         s,
         `${city.name} built a ${buildingType}.`,

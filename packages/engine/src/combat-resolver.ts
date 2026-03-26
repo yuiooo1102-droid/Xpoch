@@ -174,10 +174,12 @@ export function resolveCombat(
     (sum, u) => sum + u.strength,
     0,
   );
+  // City/terrain bonuses only apply while defenders still hold the position
+  const hasDefenders = survivingDefenders.length > 0;
   const defenderTotalStrength =
     survivingDefenders.reduce((sum, u) => sum + u.strength, 0) +
-    terrainDefenseBonus * survivingDefenders.length +
-    cityDefenseBonus;
+    (hasDefenders ? terrainDefenseBonus * survivingDefenders.length : 0) +
+    (hasDefenders ? cityDefenseBonus : 0);
 
   const attackerWins = attackerTotalStrength > defenderTotalStrength;
 

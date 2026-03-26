@@ -9,11 +9,22 @@ import type {
   City,
   HexCoord,
 } from "@xpoch/shared";
-import { hexKey, hexNeighbors, hexDistance, UNIT_STATS, TECH_TREE, BUILDING_STATS, FOOD_PER_UNIT } from "@xpoch/shared";
+import {
+  hexKey,
+  hexNeighbors,
+  hexDistance,
+  UNIT_STATS,
+  TECH_TREE,
+  BUILDING_STATS,
+  CAPITAL_DEFENSE_BONUS,
+  CITY_DEFENSE_BONUS,
+  WALLS_DEFENSE_BONUS,
+} from "@xpoch/shared";
 
 /**
- * Aggressive mock AI that trains units, builds improvements,
- * researches tech, and moves units toward enemy cities.
+ * Mock AI that groups forces at a rally hex adjacent to the target,
+ * attacks only with sufficient strength advantage, and builds
+ * diverse improvements.
  */
 export class MockAdapter implements AIAdapter {
   readonly providerId = "mock";
@@ -43,6 +54,9 @@ export class MockAdapter implements AIAdapter {
 
 // --- Military ---
 
+/** Minimum strength ratio (own / enemy) to launch an attack */
+const ATTACK_STRENGTH_RATIO = 1.0;
+
 function buildMilitaryOrders(
   state: GameState,
   factionId: FactionId,
@@ -51,41 +65,175 @@ function buildMilitaryOrders(
   const enemyCities = [...state.cities.values()].filter(
     (c) => c.factionId !== factionId,
   );
+  const ownCities = getCitiesForFaction(state, factionId);
+
+  // Pick the nearest enemy city as the primary target
+  const targetCity = pickTargetCity(ownCities, enemyCities);
+
+  // Pick a rally hex: a walkable, non-enemy-occupied hex adjacent to the target city
+  const rallyHex = targetCity
+    ? pickRallyHex(state, factionId, targetCity.coord)
+    : null;
+
+  // Estimate enemy defense strength at the target
+  const targetDefenseStrength = targetCity
+    ? estimateDefenseStrength(state, factionId, targetCity)
+    : Infinity;
+
+  // Track which hexes already have an attack order this tick
+  const attackedHexes = new Set<string>();
 
   return units.map((unit) =>
-    decideMilitaryOrder(state, factionId, unit, enemyCities),
+    decideMilitaryOrder(
+      state,
+      factionId,
+      unit,
+      rallyHex,
+      targetCity,
+      targetDefenseStrength,
+      attackedHexes,
+    ),
   );
+}
+
+function pickTargetCity(
+  ownCities: readonly City[],
+  enemyCities: readonly City[],
+): City | null {
+  if (enemyCities.length === 0 || ownCities.length === 0) return null;
+
+  let bestTarget: City | null = null;
+  let bestDist = Infinity;
+
+  for (const ec of enemyCities) {
+    for (const oc of ownCities) {
+      const d = hexDistance(ec.coord, oc.coord);
+      if (d < bestDist) {
+        bestDist = d;
+        bestTarget = ec;
+      }
+    }
+  }
+
+  return bestTarget;
+}
+
+/**
+ * Pick a rally hex adjacent to the target city that is walkable
+ * and not occupied by enemy units. Prefer hexes that are closest
+ * to our own cities (shortest approach distance).
+ */
+function pickRallyHex(
+  state: GameState,
+  factionId: FactionId,
+  targetCoord: HexCoord,
+): HexCoord | null {
+  const ownCities = getCitiesForFaction(state, factionId);
+  const candidates = hexNeighbors(targetCoord).filter((n) => {
+    const tile = state.tiles.get(hexKey(n));
+    if (!tile || tile.terrain === "water") return false;
+    return true;
+  });
+
+  if (candidates.length === 0) return null;
+
+  // Pick the one closest to our nearest city (shortest march)
+  return candidates.reduce((best, c) => {
+    const cDist = ownCities.reduce(
+      (min, oc) => Math.min(min, hexDistance(c, oc.coord)),
+      Infinity,
+    );
+    const bestDist = ownCities.reduce(
+      (min, oc) => Math.min(min, hexDistance(best, oc.coord)),
+      Infinity,
+    );
+    return cDist < bestDist ? c : best;
+  });
+}
+
+function estimateDefenseStrength(
+  state: GameState,
+  factionId: FactionId,
+  targetCity: City,
+): number {
+  // Enemy units at and around the city
+  let strength = 0;
+  const cityKey = hexKey(targetCity.coord);
+  for (const unit of state.units.values()) {
+    if (unit.factionId !== factionId && hexKey(unit.coord) === cityKey) {
+      strength += unit.strength;
+    }
+  }
+
+  // City defense bonuses
+  strength += targetCity.isCapital ? CAPITAL_DEFENSE_BONUS : CITY_DEFENSE_BONUS;
+  if (targetCity.hasWalls) {
+    strength += WALLS_DEFENSE_BONUS;
+  }
+
+  return strength;
 }
 
 function decideMilitaryOrder(
   state: GameState,
   factionId: FactionId,
   unit: Unit,
-  enemyCities: readonly City[],
+  rallyHex: HexCoord | null,
+  targetCity: City | null,
+  targetDefenseStrength: number,
+  attackedHexes: Set<string>,
 ): MilitaryOrder {
   if (unit.movement <= 0) {
     return { unitId: unit.id, action: "fortify" };
   }
 
-  // Scouts explore: move toward unexplored areas (away from own cities)
+  // Scouts explore
   if (unit.type === "scout") {
     return decideScoutOrder(state, factionId, unit);
   }
 
-  // Check for adjacent enemies to attack
-  const adjacentEnemy = findAdjacentEnemy(state, factionId, unit.coord);
-  if (adjacentEnemy) {
-    return { unitId: unit.id, action: "attack", to: adjacentEnemy };
+  // If adjacent to the target city, check if we should attack
+  if (targetCity) {
+    const distToTarget = hexDistance(unit.coord, targetCity.coord);
+    if (distToTarget === 1) {
+      const friendlyStrength = getStrengthAt(state, unit.coord, factionId);
+      if (friendlyStrength >= targetDefenseStrength * ATTACK_STRENGTH_RATIO) {
+        const targetHexKey = hexKey(targetCity.coord);
+        if (!attackedHexes.has(targetHexKey)) {
+          attackedHexes.add(targetHexKey);
+          return { unitId: unit.id, action: "attack", to: targetCity.coord };
+        }
+        // Already issued attack from this hex; fortify to be pulled into combat
+        return { unitId: unit.id, action: "fortify" };
+      }
+      // Not strong enough yet -- stay put and wait for reinforcements
+      return { unitId: unit.id, action: "fortify" };
+    }
   }
 
-  // Move toward nearest enemy city
-  if (enemyCities.length > 0) {
-    const nearest = findNearest(unit.coord, enemyCities.map((c) => c.coord));
-    if (nearest) {
-      const stepToward = findStepToward(state, unit.coord, nearest);
-      if (stepToward) {
-        return { unitId: unit.id, action: "move", to: stepToward };
+  // Check for adjacent non-city enemies (field battles)
+  const adjacentEnemyHex = findAdjacentEnemy(state, factionId, unit.coord);
+  if (adjacentEnemyHex) {
+    const friendlyStrength = getStrengthAt(state, unit.coord, factionId);
+    const enemyStrength = getEnemyStrengthAt(state, adjacentEnemyHex, factionId);
+
+    if (friendlyStrength >= enemyStrength) {
+      const hexKeyStr = hexKey(adjacentEnemyHex);
+      if (!attackedHexes.has(hexKeyStr)) {
+        attackedHexes.add(hexKeyStr);
+        return { unitId: unit.id, action: "attack", to: adjacentEnemyHex };
       }
+      return { unitId: unit.id, action: "fortify" };
+    }
+    // Outnumbered in field -- retreat toward rally point or fortify
+  }
+
+  // Move toward rally hex (or target city if no rally hex)
+  const destination = rallyHex ?? (targetCity ? targetCity.coord : null);
+  if (destination) {
+    const step = findSafeStepToward(state, factionId, unit.coord, destination);
+    if (step) {
+      return { unitId: unit.id, action: "move", to: step };
     }
   }
 
@@ -97,14 +245,18 @@ function decideScoutOrder(
   factionId: FactionId,
   unit: Unit,
 ): MilitaryOrder {
-  // Move away from own cities toward map edges for exploration
   const ownCities = [...state.cities.values()].filter(
     (c) => c.factionId === factionId,
   );
 
   const neighbors = hexNeighbors(unit.coord).filter((n) => {
     const tile = state.tiles.get(hexKey(n));
-    return tile && tile.terrain !== "water";
+    if (!tile || tile.terrain === "water") return false;
+    // Avoid hexes with enemy units
+    const hasEnemy = [...state.units.values()].some(
+      (u) => u.factionId !== factionId && hexKey(u.coord) === hexKey(n),
+    );
+    return !hasEnemy;
   });
 
   if (neighbors.length === 0) {
@@ -127,40 +279,34 @@ function findAdjacentEnemy(
   coord: HexCoord,
 ): HexCoord | null {
   for (const nb of hexNeighbors(coord)) {
+    const nbKey = hexKey(nb);
     const hasEnemy = [...state.units.values()].some(
-      (u) => u.factionId !== factionId && hexKey(u.coord) === hexKey(nb),
+      (u) => u.factionId !== factionId && hexKey(u.coord) === nbKey,
     );
     if (hasEnemy) return nb;
-
-    // Also attack enemy cities
-    const tile = state.tiles.get(hexKey(nb));
-    if (tile?.cityId) {
-      const city = state.cities.get(tile.cityId);
-      if (city && city.factionId !== factionId) return nb;
-    }
   }
   return null;
 }
 
-function findNearest(
-  from: HexCoord,
-  targets: readonly HexCoord[],
-): HexCoord | null {
-  if (targets.length === 0) return null;
-
-  return targets.reduce((closest, t) =>
-    hexDistance(from, t) < hexDistance(from, closest) ? t : closest,
-  );
-}
-
-function findStepToward(
+/**
+ * Find a step toward the target that avoids hexes with enemy units.
+ * This prevents the "move into enemy hex" validation error.
+ */
+function findSafeStepToward(
   state: GameState,
+  factionId: FactionId,
   from: HexCoord,
   target: HexCoord,
 ): HexCoord | null {
   const candidates = hexNeighbors(from).filter((n) => {
     const tile = state.tiles.get(hexKey(n));
-    return tile && tile.terrain !== "water";
+    if (!tile || tile.terrain === "water") return false;
+    // Avoid hexes occupied by enemy units
+    const nKey = hexKey(n);
+    const hasEnemy = [...state.units.values()].some(
+      (u) => u.factionId !== factionId && hexKey(u.coord) === nKey,
+    );
+    return !hasEnemy;
   });
 
   if (candidates.length === 0) return null;
@@ -170,7 +316,50 @@ function findStepToward(
   );
 }
 
+function getStrengthAt(
+  state: GameState,
+  coord: HexCoord,
+  factionId: FactionId,
+): number {
+  const key = hexKey(coord);
+  let strength = 0;
+  for (const unit of state.units.values()) {
+    if (hexKey(unit.coord) === key && unit.factionId === factionId) {
+      strength += unit.strength;
+    }
+  }
+  return strength;
+}
+
+function getEnemyStrengthAt(
+  state: GameState,
+  coord: HexCoord,
+  factionId: FactionId,
+): number {
+  const key = hexKey(coord);
+  let strength = 0;
+  for (const unit of state.units.values()) {
+    if (hexKey(unit.coord) === key && unit.factionId !== factionId) {
+      strength += unit.strength;
+    }
+  }
+  return strength;
+}
+
 // --- City Orders ---
+
+/** Building priority list */
+const BUILDING_PRIORITY: readonly {
+  readonly type: keyof typeof BUILDING_STATS;
+  readonly unique: boolean;
+}[] = [
+  { type: "barracks", unique: true },
+  { type: "library", unique: true },
+  { type: "granary", unique: true },
+  { type: "workshop", unique: true },
+  { type: "market", unique: true },
+  { type: "city_walls", unique: true },
+];
 
 function buildCityOrders(
   state: GameState,
@@ -189,46 +378,34 @@ function decideCityOrder(
 ): CityOrder {
   const faction = state.factions.get(factionId)!;
 
-  // If already building something, continue (or rush if affordable)
+  // If already building something, continue
   if (city.currentProject) {
     return { cityId: city.id, action: "idle" };
   }
 
-  // Try to build barracks if missing and we have the required tech (or no tech needed)
-  const hasBarracks = [...state.tiles.values()].some(
-    (t) => t.isCityOutskirt === city.id && t.building === "barracks",
-  );
+  // Try to build buildings in priority order
+  for (const entry of BUILDING_PRIORITY) {
+    if (!canBuildBuilding(faction, entry.type)) continue;
 
-  if (!hasBarracks && canBuildBuilding(faction, "barracks")) {
-    const buildHex = findBuildableHex(state, city.id, "barracks");
+    if (entry.unique) {
+      const alreadyHas = [...state.tiles.values()].some(
+        (t) => t.isCityOutskirt === city.id && t.building === entry.type,
+      );
+      if (alreadyHas) continue;
+    }
+
+    const buildHex = findBuildableHex(state, city.id, entry.type);
     if (buildHex) {
       return {
         cityId: city.id,
         action: "build",
-        target: "barracks",
+        target: entry.type,
         hex: buildHex,
       };
     }
   }
 
-  // Try to build a library if missing (no tech required, gives research)
-  const hasLibrary = [...state.tiles.values()].some(
-    (t) => t.isCityOutskirt === city.id && t.building === "library",
-  );
-
-  if (!hasLibrary && canBuildBuilding(faction, "library")) {
-    const buildHex = findBuildableHex(state, city.id, "library");
-    if (buildHex) {
-      return {
-        cityId: city.id,
-        action: "build",
-        target: "library",
-        hex: buildHex,
-      };
-    }
-  }
-
-  // Train military units — always train if gold allows (food is managed by economy)
+  // Train military units if gold allows
   if (gold >= UNIT_STATS.infantry.cost) {
     const ownUnits = [...state.units.values()].filter(
       (u) => u.factionId === factionId,
@@ -272,7 +449,6 @@ function findBuildableHex(
     if (tile.isCityOutskirt !== cityId) continue;
     if (tile.building) continue;
 
-    // Check terrain compatibility
     if (stats.anyLand && tile.terrain !== "water") {
       return tile.coord;
     }
@@ -286,7 +462,14 @@ function findBuildableHex(
 
 // --- Research ---
 
-const PRIORITY_TECHS = ["bronze_working", "mining", "pottery", "animal_husbandry"];
+const PRIORITY_TECHS = [
+  "bronze_working",
+  "mining",
+  "pottery",
+  "animal_husbandry",
+  "currency",
+  "masonry",
+];
 
 function pickResearch(researchedTechs: readonly string[]): string | null {
   const available = TECH_TREE.filter((t) => {
@@ -296,11 +479,9 @@ function pickResearch(researchedTechs: readonly string[]): string | null {
 
   if (available.length === 0) return null;
 
-  // Prioritize military/economy techs first
   const prioritized = available.find((t) => PRIORITY_TECHS.includes(t.id));
   if (prioritized) return prioritized.id;
 
-  // Otherwise pick cheapest
   return available.reduce((a, b) => (a.cost <= b.cost ? a : b)).id;
 }
 

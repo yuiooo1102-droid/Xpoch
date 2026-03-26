@@ -88,12 +88,12 @@ describe("resolveCombat", () => {
   });
 
   describe("city defense bonus", () => {
-    it("defender survives thanks to city defense bonus on winner calc", () => {
-      // 1 artillery (str 4) attacking 1 cavalry (str 3) in a city
-      // No trump between artillery and cavalry... wait, cavalry trumps artillery!
+    it("attacker wins when all defenders are killed despite city bonus", () => {
+      // 1 artillery (str 4) attacking 1 cavalry (str 3) in a city (bonus 4)
       // Cavalry (def) trumps artillery (atk): defender deals 3 first.
       // 3 < 4 so artillery survives. Artillery deals 4 back, 4 >= 3 cavalry dies.
-      // Surviving attacker str=4, surviving defender str=0+city bonus=4 → tie → defender wins.
+      // All defenders killed → city bonus no longer applies.
+      // Surviving attacker str=4 vs defender str=0 → attacker wins.
       const attackers = [createUnit(FACTION_A, "artillery", HEX)];
       const defenders = [createUnit(FACTION_B, "cavalry", HEX)];
 
@@ -101,8 +101,8 @@ describe("resolveCombat", () => {
 
       // Cavalry trumps artillery: cavalry deals 3 first.
       // 3 < 4, artillery survives. Artillery deals 4 back, kills cavalry.
-      // Winner: attacker str 4 vs defender str 0 + city bonus 4 = 4, tie → defender wins.
-      expect(result.attackerWins).toBe(false);
+      // All defenders eliminated → city/terrain bonuses don't apply.
+      expect(result.attackerWins).toBe(true);
     });
 
     it("attacker overcomes city defense with superior numbers", () => {

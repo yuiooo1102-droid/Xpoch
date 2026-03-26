@@ -156,8 +156,11 @@ function executeAttackCombat(
 
   const enemyUnits = getEnemyUnitsAt(state, target, factionId);
 
+  // Gather ALL friendly units at the attacker's hex to join the assault
+  const allAttackers = getFriendlyUnitsAt(state, attacker.coord, factionId);
+
   const combatResult = resolveCombat(
-    [attacker],
+    allAttackers,
     enemyUnits,
     terrainBonus,
     cityBonus,
@@ -525,6 +528,21 @@ function getEnemyUnitsAt(
   const results: Unit[] = [];
   for (const unit of state.units.values()) {
     if (hexKey(unit.coord) === key && unit.factionId !== factionId) {
+      results.push(unit);
+    }
+  }
+  return results;
+}
+
+function getFriendlyUnitsAt(
+  state: GameState,
+  coord: HexCoord,
+  factionId: FactionId,
+): Unit[] {
+  const key = hexKey(coord);
+  const results: Unit[] = [];
+  for (const unit of state.units.values()) {
+    if (hexKey(unit.coord) === key && unit.factionId === factionId) {
       results.push(unit);
     }
   }
