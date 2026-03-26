@@ -12,6 +12,8 @@ import type {
   City,
   CityId,
   LogEntry,
+  HistoricalFaction,
+  GeneralDef,
 } from "@xpoch/shared";
 import {
   hexKey,
@@ -23,6 +25,7 @@ import {
   STARTING_ARMY_TROOPS,
   GENERAL_POOL,
   GENERALS_PER_FACTION,
+  CITY_NAMES,
 } from "@xpoch/shared";
 import { generateMap } from "./map-generator";
 
@@ -33,6 +36,7 @@ export interface FactionConfig {
   readonly name: string;
   readonly modelProvider: string;
   readonly color: string;
+  readonly historicalFaction?: HistoricalFaction;
 }
 
 // === Helpers ===
@@ -94,6 +98,73 @@ function shuffle<T>(arr: readonly T[], rng: () => number): T[] {
   return result;
 }
 
+/**
+ * Assign generals to factions, preferring historical alignment.
+ * Each faction first gets generals matching its historicalFaction,
+ * then fills remaining slots from the unassigned pool.
+ */
+function assignHistoricalGenerals(
+  factionConfigs: readonly FactionConfig[],
+  generalsPerFaction: number,
+  rng: () => number,
+): ReadonlyMap<FactionId, readonly GeneralDef[]> {
+  const assigned = new Set<string>();
+  const result = new Map<FactionId, readonly GeneralDef[]>();
+
+  // First pass: assign historical generals to matching factions
+  for (const cfg of factionConfigs) {
+    const hf = cfg.historicalFaction;
+    if (!hf) continue;
+
+    const matching = GENERAL_POOL.filter(
+      (g) => g.historicalFaction === hf && !assigned.has(g.id),
+    );
+    const shuffled = shuffle(matching, rng);
+    const picked = shuffled.slice(0, generalsPerFaction);
+    for (const g of picked) {
+      assigned.add(g.id);
+    }
+    result.set(cfg.id, picked);
+  }
+
+  // Second pass: fill remaining slots from unassigned pool
+  const remaining = shuffle(
+    GENERAL_POOL.filter((g) => !assigned.has(g.id)),
+    rng,
+  );
+  let remainingIdx = 0;
+
+  for (const cfg of factionConfigs) {
+    const current = result.get(cfg.id) ?? [];
+    const needed = generalsPerFaction - current.length;
+    if (needed <= 0) continue;
+
+    const extras = remaining.slice(remainingIdx, remainingIdx + needed);
+    remainingIdx += needed;
+    for (const g of extras) {
+      assigned.add(g.id);
+    }
+    result.set(cfg.id, [...current, ...extras]);
+  }
+
+  return result;
+}
+
+/**
+ * Get a themed city name based on historical faction and city index.
+ */
+function getCityName(
+  historicalFaction: HistoricalFaction | undefined,
+  cityIndex: number,
+  isCapital: boolean,
+): string {
+  const hf = historicalFaction ?? "neutral";
+  const names = CITY_NAMES[hf];
+  if (isCapital) return names[0];
+  const idx = Math.min(cityIndex, names.length - 1);
+  return names[idx] ?? names[0];
+}
+
 // === State creation ===
 
 export function createInitialState(
@@ -112,20 +183,19 @@ export function createInitialState(
   const cities = new Map<CityId, City>();
   const spawnCoords = pickSpawnPositions(mapRadius, factionConfigs.length);
 
-  // Shuffle general pool and assign GENERALS_PER_FACTION to each faction (no duplicates)
-  const shuffledGenerals = shuffle(GENERAL_POOL, rng);
-  let generalIndex = 0;
+  // Assign generals with historical faction preference
+  const factionGeneralMap = assignHistoricalGenerals(
+    factionConfigs,
+    GENERALS_PER_FACTION,
+    rng,
+  );
 
   for (let i = 0; i < factionConfigs.length; i++) {
     const cfg = factionConfigs[i];
     const spawn = spawnCoords[i];
 
     // Assign generals
-    const factionGeneralDefs = shuffledGenerals.slice(
-      generalIndex,
-      generalIndex + GENERALS_PER_FACTION,
-    );
-    generalIndex += GENERALS_PER_FACTION;
+    const factionGeneralDefs = factionGeneralMap.get(cfg.id) ?? [];
 
     for (const genDef of factionGeneralDefs) {
       const general: General = {
@@ -141,12 +211,13 @@ export function createInitialState(
       generals.set(general.id, general);
     }
 
-    // Create capital city
+    // Create capital city with themed name
     const cityId = nextCityId(cfg.id);
+    const capitalName = getCityName(cfg.historicalFaction, 0, true);
     cities.set(cityId, {
       id: cityId,
       factionId: cfg.id,
-      name: `${cfg.name} Capital`,
+      name: capitalName,
       coord: spawn,
       isCapital: true,
       level: 1,

@@ -41,7 +41,8 @@ describe("buildPrompt", () => {
   it("includes city info", () => {
     const prompt = buildPrompt(state, "f1");
     expect(prompt).toContain("CITIES");
-    expect(prompt).toContain("Alpha Capital");
+    // City uses themed name from CITY_NAMES (neutral pool for non-historical factions)
+    expect(prompt).toContain("荆州");
   });
 
   it("includes generals info", () => {

@@ -47,6 +47,8 @@ export interface GeneralSkill {
   readonly description: string;
 }
 
+export type HistoricalFaction = "shu" | "wei" | "wu" | "neutral";
+
 export interface GeneralDef {
   readonly id: GeneralId;
   readonly name: string;
@@ -55,6 +57,7 @@ export interface GeneralDef {
   readonly baseDefense: number;
   readonly baseSpeed: number;
   readonly skill: GeneralSkill;
+  readonly historicalFaction: HistoricalFaction;
 }
 
 export interface General {

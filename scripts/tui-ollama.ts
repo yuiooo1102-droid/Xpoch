@@ -1,7 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
- * Xpoch Terminal Sandbox — Full game rendered in terminal
- * Usage: npx tsx scripts/tui.ts [tick_ms=2000]
+ * Xpoch Terminal Sandbox — Ollama Local Models Edition
+ * Usage: npx tsx scripts/tui-ollama.ts [tick_ms=15000]
+ *
+ * Requires Ollama running at localhost:11434 with:
+ *   - glm-4.7-flash:latest
+ *   - qwen3:8b
  */
 
 import { createInitialState } from "@xpoch/engine";
@@ -18,24 +22,35 @@ import {
   advanceTick,
   addLogEntry,
 } from "@xpoch/engine";
-import { MockAdapter } from "@xpoch/ai-adapter";
-import type { GameState, FactionId, TurnDecision, Faction, Army, City, GeneralDef } from "@xpoch/shared";
-import { hexKey, hexNeighbors, GENERAL_POOL } from "@xpoch/shared";
-
-// Build a lookup map for general definitions by id
-const GENERAL_DEF_MAP = new Map<string, GeneralDef>(
-  GENERAL_POOL.map((g) => [g.id, g]),
-);
+import { OpenAICompatibleAdapter } from "@xpoch/ai-adapter";
+import type { GameState, FactionId, TurnDecision, Faction, Army, City } from "@xpoch/shared";
+import { hexKey, hexNeighbors } from "@xpoch/shared";
 
 // === Config ===
-const TICK_MS = parseInt(process.argv[2] ?? "1500", 10);
+const TICK_MS = parseInt(process.argv[2] ?? "15000", 10);
 const MAP_RADIUS = 10;
+const AI_TIMEOUT_MS = 12_000;
 
-const FACTIONS = [
-  { id: "f0", name: "蜀汉·Claude", modelProvider: "mock", color: "purple", historicalFaction: "shu" as const },
-  { id: "f1", name: "魏国·GPT", modelProvider: "mock", color: "green", historicalFaction: "wei" as const },
-  { id: "f2", name: "吴国·Gemini", modelProvider: "mock", color: "blue", historicalFaction: "wu" as const },
+const OLLAMA_BASE_URL = "http://localhost:11434/v1";
+const OLLAMA_API_KEY = "ollama";
+
+const FACTION_MODELS: ReadonlyArray<{
+  readonly id: string;
+  readonly name: string;
+  readonly model: string;
+  readonly color: string;
+}> = [
+  { id: "f0", name: "蜀汉·GLM",   model: "glm-4.7-flash:latest", color: "purple" },
+  { id: "f1", name: "魏国·Qwen",   model: "qwen3:8b",             color: "green"  },
+  { id: "f2", name: "吴国·GLM",    model: "glm-4.7-flash:latest", color: "blue"   },
 ];
+
+const FACTIONS = FACTION_MODELS.map((f) => ({
+  id: f.id,
+  name: f.name,
+  modelProvider: "ollama" as const,
+  color: f.color,
+}));
 
 // === ANSI Colors ===
 const ESC = "\x1b";
@@ -59,11 +74,11 @@ const FACTION_BG: Record<string, string> = {
 };
 
 const TERRAIN_CHAR: Record<string, string> = {
-  plains: `${ESC}[32m·${RESET}`,    // green dot
-  forest: `${ESC}[32m♣${RESET}`,    // green club
-  mountain: `${ESC}[37m▲${RESET}`,  // white triangle
-  water: `${ESC}[34m~${RESET}`,     // blue tilde
-  desert: `${ESC}[33m.${RESET}`,    // yellow dot
+  plains: `${ESC}[32m·${RESET}`,
+  forest: `${ESC}[32m♣${RESET}`,
+  mountain: `${ESC}[37m▲${RESET}`,
+  water: `${ESC}[34m~${RESET}`,
+  desert: `${ESC}[33m.${RESET}`,
 };
 
 const BUILDING_CHAR: Record<string, string> = {
@@ -76,9 +91,11 @@ const BUILDING_CHAR: Record<string, string> = {
   fortress: `${ESC}[31m堡${RESET}`,
 };
 
+// === AI Response Timing ===
+let lastAIStatus = "";
+
 // === Hex to Screen ===
 function hexToScreen(q: number, r: number, centerX: number, centerY: number): [number, number] {
-  // Flat-top hex: each hex is 3 chars wide, 2 chars tall
   const x = centerX + q * 3 + r * 1;
   const y = centerY + r * 1;
   return [Math.round(x), Math.round(y)];
@@ -86,13 +103,12 @@ function hexToScreen(q: number, r: number, centerX: number, centerY: number): [n
 
 // === Render Functions ===
 
-function renderMap(state: GameState, width: number, height: number): string[] {
+function renderMap(state: GameState, width: number, height: number): readonly string[] {
   const mapHeight = Math.min(height - 12, MAP_RADIUS * 2 + 3);
   const mapWidth = Math.min(width - 35, MAP_RADIUS * 6 + 5);
   const centerX = Math.floor(mapWidth / 2);
   const centerY = Math.floor(mapHeight / 2);
 
-  // Initialize grid
   const grid: string[][] = [];
   for (let y = 0; y < mapHeight; y++) {
     grid[y] = [];
@@ -101,22 +117,18 @@ function renderMap(state: GameState, width: number, height: number): string[] {
     }
   }
 
-  // Build army index
-  const armyAt = new Map<string, Army[]>();
+  const armyAt = new Map<string, readonly Army[]>();
   for (const army of state.armies.values()) {
     const key = hexKey(army.coord);
     const existing = armyAt.get(key) ?? [];
-    existing.push(army);
-    armyAt.set(key, existing);
+    armyAt.set(key, [...existing, army]);
   }
 
-  // Build city index
   const cityAt = new Map<string, City>();
   for (const city of state.cities.values()) {
     cityAt.set(hexKey(city.coord), city);
   }
 
-  // Render tiles
   for (const tile of state.tiles.values()) {
     const [sx, sy] = hexToScreen(tile.coord.q, tile.coord.r, centerX, centerY);
     if (sy < 0 || sy >= mapHeight || sx < 0 || sx >= mapWidth) continue;
@@ -126,12 +138,10 @@ function renderMap(state: GameState, width: number, height: number): string[] {
     const armies = armyAt.get(key);
 
     if (city) {
-      // City: show faction-colored city marker
       const fg = FACTION_FG[city.factionId] ?? "";
       const cap = city.isCapital ? "★" : "城";
       grid[sy][sx] = `${BOLD}${fg}${cap}${RESET}`;
     } else if (armies && armies.length > 0) {
-      // Army: show faction-colored troop indicator
       const army = armies[0];
       const fg = FACTION_FG[army.factionId] ?? "";
       const total = army.troops.infantry + army.troops.cavalry + army.troops.archer;
@@ -140,11 +150,9 @@ function renderMap(state: GameState, width: number, height: number): string[] {
     } else if (tile.building) {
       grid[sy][sx] = BUILDING_CHAR[tile.building] ?? "?";
     } else if (tile.owner) {
-      // Owned territory: dim faction-colored dot
       const fg = FACTION_FG[tile.owner] ?? "";
       grid[sy][sx] = `${DIM}${fg}░${RESET}`;
     } else {
-      // Neutral terrain
       grid[sy][sx] = TERRAIN_CHAR[tile.terrain] ?? " ";
     }
   }
@@ -152,7 +160,7 @@ function renderMap(state: GameState, width: number, height: number): string[] {
   return grid.map((row) => row.join(""));
 }
 
-function renderFactionPanel(state: GameState): string[] {
+function renderFactionPanel(state: GameState): readonly string[] {
   const lines: string[] = [];
   lines.push(`${BOLD}━━━ 势力 ━━━${RESET}`);
 
@@ -171,19 +179,17 @@ function renderFactionPanel(state: GameState): string[] {
     for (const a of armies) totalTroops += a.troops.infantry + a.troops.cavalry + a.troops.archer;
     for (const c of cities) totalTroops += c.garrison.infantry + c.garrison.cavalry + c.garrison.archer;
 
-    lines.push(`${BOLD}${fg}◆ ${f.name}${RESET}`);
+    const modelInfo = FACTION_MODELS.find((fm) => fm.id === fid);
+    lines.push(`${BOLD}${fg}◆ ${f.name}${RESET} ${DIM}(${modelInfo?.model ?? "??"})${RESET}`);
     lines.push(`  领地:${f.territoryCount} 城:${cities.length} 军:${armies.length} 兵:${totalTroops}`);
     lines.push(`  金:${f.resources.gold} 粮:${f.resources.food} 木:${f.resources.wood} 铁:${f.resources.iron}`);
 
-    // Generals with skills
-    for (const g of generals) {
-      const def = GENERAL_DEF_MAP.get(g.defId);
+    const genStrs = generals.map((g) => {
       const alive = g.alive ? `Lv${g.level}` : `☠`;
-      const skillName = def?.skill.name ?? "?";
-      lines.push(`  ${g.name}(${alive}) [${skillName}]`);
-    }
+      return `${g.name}(${alive})`;
+    }).join(" ");
+    lines.push(`  将:${genStrs}`);
 
-    // Tech count
     lines.push(`  科技:${f.techs.length}`);
     lines.push("");
   }
@@ -191,7 +197,7 @@ function renderFactionPanel(state: GameState): string[] {
   return lines;
 }
 
-function renderLog(state: GameState, maxLines: number): string[] {
+function renderLog(state: GameState, maxLines: number): readonly string[] {
   const lines: string[] = [];
   lines.push(`${BOLD}━━━ 战报 ━━━${RESET}`);
 
@@ -207,7 +213,6 @@ function renderLog(state: GameState, maxLines: number): string[] {
       system: `${ESC}[37m⚙${RESET}`,
     };
     const icon = catIcon[entry.category] ?? "?";
-    // Truncate long messages
     const msg = entry.message.length > 40 ? entry.message.slice(0, 37) + "..." : entry.message;
     lines.push(`${DIM}T${entry.tick}${RESET} ${icon} ${msg}`);
   }
@@ -215,7 +220,7 @@ function renderLog(state: GameState, maxLines: number): string[] {
   return lines;
 }
 
-function render(state: GameState): void {
+function render(state: GameState, statusLine?: string): void {
   const cols = process.stdout.columns || 120;
   const rows = process.stdout.rows || 40;
 
@@ -225,14 +230,15 @@ function render(state: GameState): void {
   const logMaxLines = rows - factionLines.length - 6;
   const logLines = renderLog(state, Math.max(5, logMaxLines));
 
-  // Compose: map on left, sidebar on right
   const output: string[] = [];
 
-  // Title bar
   const winnerText = state.winner
     ? `${BOLD}${ESC}[33m  ⚜ ${state.factions.get(state.winner)?.name} 获胜! ⚜${RESET}`
     : "";
-  output.push(`${BOLD}${ESC}[33m  ⚔ 率土争霸·三国 ⚔  T${state.tick}${RESET}${winnerText}`);
+  const status = statusLine
+    ? `  ${DIM}${statusLine}${RESET}`
+    : "";
+  output.push(`${BOLD}${ESC}[33m  ⚔ XPOCH 率土争霸 [Ollama] ⚔  T${state.tick}${RESET}${winnerText}${status}`);
   output.push(`${"─".repeat(cols)}`);
 
   const sideLines = [...factionLines, "", ...logLines];
@@ -241,34 +247,77 @@ function render(state: GameState): void {
   for (let i = 0; i < maxHeight; i++) {
     const mapPart = mapLines[i] ?? "";
     const sidePart = sideLines[i] ?? "";
-    // Pad map to fixed width (approximate, ANSI makes this imprecise)
     output.push(`${mapPart}  │ ${sidePart}`);
   }
 
-  // Legend
-  output.push(`${"─".repeat(cols)}`);
-  output.push(
-    `${DIM} 地形: ${TERRAIN_CHAR["plains"]}平原 ${TERRAIN_CHAR["forest"]}森林 ${TERRAIN_CHAR["mountain"]}山地 ${TERRAIN_CHAR["water"]}水域 ${TERRAIN_CHAR["desert"]}沙漠` +
-    `  建筑: ${BUILDING_CHAR["farm"]} ${BUILDING_CHAR["lumber_mill"]} ${BUILDING_CHAR["mine"]} ${BUILDING_CHAR["market"]} ${BUILDING_CHAR["barracks"]} ${BUILDING_CHAR["watchtower"]} ${BUILDING_CHAR["fortress"]}` +
-    `  ★首都 城城池 ■大军 ●中军 •小军 ░领地${RESET}`,
-  );
-
   process.stdout.write(CLEAR + output.join("\n") + "\n");
+}
+
+// === Timeout helper ===
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label}: timeout after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
+// === Ollama health check ===
+async function checkOllama(): Promise<boolean> {
+  try {
+    const response = await fetch(`${OLLAMA_BASE_URL}/models`);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// === Empty decision fallback ===
+function emptyDecision(factionId: FactionId): TurnDecision {
+  return {
+    factionId,
+    armies: [],
+    buildOrders: [],
+    recruitOrders: [],
+    techOrders: [],
+    diplomacyOrders: [],
+  };
 }
 
 // === Game Loop ===
 
 async function main(): Promise<void> {
+  // Check Ollama is available
+  const ollamaUp = await checkOllama();
+  if (!ollamaUp) {
+    console.error(`\n${BOLD}${ESC}[31mError: Ollama is not running at ${OLLAMA_BASE_URL}${RESET}`);
+    console.error(`\nPlease start Ollama and ensure these models are available:`);
+    console.error(`  ollama pull glm-4.7-flash`);
+    console.error(`  ollama pull qwen3:8b`);
+    console.error(`\nThen run: npx tsx scripts/tui-ollama.ts\n`);
+    process.exit(1);
+  }
+
   process.stdout.write(HIDE_CURSOR);
   process.on("exit", () => process.stdout.write(SHOW_CURSOR));
   process.on("SIGINT", () => { process.stdout.write(SHOW_CURSOR); process.exit(0); });
 
   let state = createInitialState(MAP_RADIUS, Date.now(), FACTIONS);
-  const adapters = new Map<FactionId, MockAdapter>(
-    FACTIONS.map((f) => [f.id, new MockAdapter()])
+
+  const adapters = new Map<FactionId, OpenAICompatibleAdapter>(
+    FACTION_MODELS.map((f) => [
+      f.id,
+      new OpenAICompatibleAdapter(
+        "ollama",
+        OLLAMA_API_KEY,
+        OLLAMA_BASE_URL,
+        f.model,
+      ),
+    ]),
   );
 
-  render(state);
+  render(state, "Ollama models loaded. Starting...");
 
   const tick = async () => {
     if (state.winner) return;
@@ -283,14 +332,35 @@ async function main(): Promise<void> {
 
     // AI decisions
     const alive = [...state.factions.values()].filter((f) => f.alive);
+    const timings: string[] = [];
+
     for (const faction of alive) {
       const adapter = adapters.get(faction.id);
       if (!adapter) continue;
+
+      const modelInfo = FACTION_MODELS.find((fm) => fm.id === faction.id);
+      render(state, `${faction.name} thinking... (${modelInfo?.model ?? "??"})`);
+
+      const startMs = Date.now();
       try {
-        const decision = await adapter.decideActions(state, faction.id);
+        const decision = await withTimeout(
+          adapter.decideActions(state, faction.id),
+          AI_TIMEOUT_MS,
+          faction.name,
+        );
+        const elapsed = Date.now() - startMs;
+        timings.push(`${faction.name}:${(elapsed / 1000).toFixed(1)}s`);
         state = executeTurnDecision(state, decision);
-      } catch {
-        // skip
+      } catch (err) {
+        const elapsed = Date.now() - startMs;
+        const message = err instanceof Error ? err.message : String(err);
+        timings.push(`${faction.name}:ERR`);
+        state = addLogEntry(
+          state,
+          `${faction.name} AI error (${(elapsed / 1000).toFixed(1)}s): ${message.slice(0, 50)}`,
+          "system",
+          [faction.id],
+        );
       }
     }
 
@@ -309,7 +379,8 @@ async function main(): Promise<void> {
     }
 
     state = advanceTick(state);
-    render(state);
+    lastAIStatus = timings.join("  ");
+    render(state, lastAIStatus);
 
     if (!state.winner) {
       setTimeout(tick, TICK_MS);
@@ -319,4 +390,8 @@ async function main(): Promise<void> {
   setTimeout(tick, 500);
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  process.stdout.write(SHOW_CURSOR);
+  console.error("Fatal error:", err);
+  process.exit(1);
+});

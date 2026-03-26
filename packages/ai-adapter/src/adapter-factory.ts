@@ -22,7 +22,10 @@ export function createAdapter(config: PlayerConfig): AIAdapter {
   const apiKey = config.apiKey || process.env[provider.envKey] || "";
   const model = config.model || provider.defaultModel;
 
-  if (!apiKey) {
+  // Local providers (ollama, mlx-local) don't need API keys
+  const isLocal = provider.id === "ollama" || provider.id === "mlx-local";
+
+  if (!apiKey && !isLocal) {
     console.warn(`No API key for ${provider.name} — ${config.name} falls back to mock`);
     return new MockAdapter();
   }

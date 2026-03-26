@@ -1,4 +1,4 @@
-import type { TerrainType, TroopType, BuildingType, GeneralDef, Resources } from "./types";
+import type { TerrainType, TroopType, BuildingType, GeneralDef, Resources, HistoricalFaction } from "./types";
 
 // === Map ===
 export const MAP_SIZE = 12;
@@ -67,19 +67,41 @@ export const TRUMP_BONUS = 1.3; // 30% damage bonus when trumping
 
 // === General Pool ===
 export const GENERAL_POOL: readonly GeneralDef[] = [
-  { id: "lubu", name: "吕布", specialty: "cavalry", baseAttack: 9, baseDefense: 5, baseSpeed: 3, skill: { name: "无双", type: "passive", description: "攻击+30%" } },
-  { id: "zhuge", name: "诸葛亮", specialty: "archer", baseAttack: 7, baseDefense: 6, baseSpeed: 2, skill: { name: "火攻", type: "active", description: "对目标格额外30%伤害" } },
-  { id: "guanyu", name: "关羽", specialty: "infantry", baseAttack: 8, baseDefense: 8, baseSpeed: 2, skill: { name: "武圣", type: "passive", description: "防御+30%" } },
-  { id: "zhaoyn", name: "赵云", specialty: "cavalry", baseAttack: 8, baseDefense: 6, baseSpeed: 3, skill: { name: "龙胆", type: "passive", description: "速度+1, 首回合双倍伤害" } },
-  { id: "caocao", name: "曹操", specialty: "all", baseAttack: 7, baseDefense: 7, baseSpeed: 2, skill: { name: "奸雄", type: "passive", description: "领地资源+20%" } },
-  { id: "zhouyu", name: "周瑜", specialty: "archer", baseAttack: 8, baseDefense: 5, baseSpeed: 2, skill: { name: "连环计", type: "active", description: "敌将1tick无法行动" } },
-  { id: "zhangf", name: "张飞", specialty: "infantry", baseAttack: 9, baseDefense: 6, baseSpeed: 2, skill: { name: "咆哮", type: "passive", description: "周围友军攻击+15%" } },
-  { id: "simay", name: "司马懿", specialty: "all", baseAttack: 6, baseDefense: 8, baseSpeed: 2, skill: { name: "隐忍", type: "passive", description: "科技速度+30%" } },
-  { id: "sunce", name: "孙策", specialty: "cavalry", baseAttack: 8, baseDefense: 5, baseSpeed: 3, skill: { name: "霸王", type: "passive", description: "攻城伤害+50%" } },
-  { id: "huangz", name: "黄忠", specialty: "archer", baseAttack: 9, baseDefense: 4, baseSpeed: 1, skill: { name: "百步穿杨", type: "passive", description: "弓兵攻击+25%" } },
+  // Neutral
+  { id: "lubu", name: "吕布", specialty: "cavalry", baseAttack: 9, baseDefense: 5, baseSpeed: 3, skill: { name: "无双", type: "passive", description: "攻击+30%" }, historicalFaction: "neutral" },
+  // 蜀汉
+  { id: "zhuge", name: "诸葛亮", specialty: "archer", baseAttack: 7, baseDefense: 6, baseSpeed: 2, skill: { name: "火攻", type: "active", description: "对目标格额外30%伤害" }, historicalFaction: "shu" },
+  { id: "guanyu", name: "关羽", specialty: "infantry", baseAttack: 8, baseDefense: 8, baseSpeed: 2, skill: { name: "武圣", type: "passive", description: "防御+30%" }, historicalFaction: "shu" },
+  { id: "zhaoyn", name: "赵云", specialty: "cavalry", baseAttack: 8, baseDefense: 6, baseSpeed: 3, skill: { name: "龙胆", type: "passive", description: "速度+1, 首回合双倍伤害" }, historicalFaction: "shu" },
+  { id: "zhangf", name: "张飞", specialty: "infantry", baseAttack: 9, baseDefense: 6, baseSpeed: 2, skill: { name: "咆哮", type: "passive", description: "周围友军攻击+15%" }, historicalFaction: "shu" },
+  { id: "machao", name: "马超", specialty: "cavalry", baseAttack: 9, baseDefense: 4, baseSpeed: 3, skill: { name: "锦马超", type: "passive", description: "骑兵攻击+20%" }, historicalFaction: "shu" },
+  { id: "huangyueying", name: "黄月英", specialty: "archer", baseAttack: 6, baseDefense: 5, baseSpeed: 2, skill: { name: "奇谋", type: "active", description: "降低敌方防御20%" }, historicalFaction: "shu" },
+  { id: "jiangwei", name: "姜维", specialty: "all", baseAttack: 7, baseDefense: 7, baseSpeed: 2, skill: { name: "麒麟儿", type: "passive", description: "所有兵种+10%" }, historicalFaction: "shu" },
+  // 魏国
+  { id: "caocao", name: "曹操", specialty: "all", baseAttack: 7, baseDefense: 7, baseSpeed: 2, skill: { name: "奸雄", type: "passive", description: "领地资源+20%" }, historicalFaction: "wei" },
+  { id: "simay", name: "司马懿", specialty: "all", baseAttack: 6, baseDefense: 8, baseSpeed: 2, skill: { name: "隐忍", type: "passive", description: "科技速度+30%" }, historicalFaction: "wei" },
+  { id: "xuchu", name: "许褚", specialty: "infantry", baseAttack: 9, baseDefense: 7, baseSpeed: 1, skill: { name: "虎痴", type: "passive", description: "步兵防御+25%" }, historicalFaction: "wei" },
+  { id: "dianwei", name: "典韦", specialty: "infantry", baseAttack: 10, baseDefense: 6, baseSpeed: 1, skill: { name: "古之恶来", type: "passive", description: "攻击+20%但防御-10%" }, historicalFaction: "wei" },
+  { id: "zhangliao", name: "张辽", specialty: "cavalry", baseAttack: 8, baseDefense: 7, baseSpeed: 3, skill: { name: "逍遥津", type: "active", description: "突击伤害+35%" }, historicalFaction: "wei" },
+  { id: "pangde", name: "庞德", specialty: "cavalry", baseAttack: 8, baseDefense: 6, baseSpeed: 3, skill: { name: "抬棺决战", type: "passive", description: "攻击时无视城防" }, historicalFaction: "wei" },
+  // 吴国
+  { id: "zhouyu", name: "周瑜", specialty: "archer", baseAttack: 8, baseDefense: 5, baseSpeed: 2, skill: { name: "连环计", type: "active", description: "敌将1tick无法行动" }, historicalFaction: "wu" },
+  { id: "sunce", name: "孙策", specialty: "cavalry", baseAttack: 8, baseDefense: 5, baseSpeed: 3, skill: { name: "霸王", type: "passive", description: "攻城伤害+50%" }, historicalFaction: "wu" },
+  { id: "huangz", name: "黄忠", specialty: "archer", baseAttack: 9, baseDefense: 4, baseSpeed: 1, skill: { name: "百步穿杨", type: "passive", description: "弓兵攻击+25%" }, historicalFaction: "wu" },
+  { id: "lvmeng", name: "吕蒙", specialty: "infantry", baseAttack: 7, baseDefense: 7, baseSpeed: 2, skill: { name: "白衣渡江", type: "active", description: "无视地形移动" }, historicalFaction: "wu" },
+  { id: "ganning", name: "甘宁", specialty: "infantry", baseAttack: 8, baseDefense: 5, baseSpeed: 2, skill: { name: "百骑劫营", type: "active", description: "夜袭伤害+40%" }, historicalFaction: "wu" },
+  { id: "taishici", name: "太史慈", specialty: "archer", baseAttack: 8, baseDefense: 6, baseSpeed: 2, skill: { name: "神射", type: "passive", description: "弓兵攻击+20%" }, historicalFaction: "wu" },
 ];
 
-export const GENERALS_PER_FACTION = 3;
+export const GENERALS_PER_FACTION = 4;
+
+// === City Names (Three Kingdoms themed) ===
+export const CITY_NAMES: Record<HistoricalFaction, readonly string[]> = {
+  shu: ["成都", "汉中", "白帝城", "绵竹", "剑阁", "南中"],
+  wei: ["洛阳", "许昌", "邺城", "长安", "宛城", "合肥"],
+  wu: ["建业", "柴桑", "武昌", "庐江", "会稽", "南郡"],
+  neutral: ["荆州", "襄阳", "徐州", "兖州", "冀州", "豫州"],
+};
 export const GENERAL_RESPAWN_TICKS = 3;
 export const GENERAL_MAX_LEVEL = 10;
 export const EXP_PER_LEVEL = 100;

@@ -108,7 +108,8 @@ describe("assignGenerals", () => {
   });
 
   it("throws if not enough generals in pool", () => {
-    expect(() => assignGenerals(["f1", "f2", "f3", "f4"], 3, 42)).toThrow(
+    // Pool has 20 generals, so 4 factions x 6 = 24 should exceed pool
+    expect(() => assignGenerals(["f1", "f2", "f3", "f4"], 6, 42)).toThrow(
       /Not enough generals/,
     );
   });
