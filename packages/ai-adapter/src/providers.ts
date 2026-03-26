@@ -95,6 +95,22 @@ export const PROVIDERS: readonly ProviderDef[] = [
     envKey: "DOUBAO_API_KEY",
   },
   {
+    id: "mlx-local",
+    name: "MLX Local (Apple Silicon)",
+    apiStyle: "openai-compatible",
+    baseUrl: "http://localhost:8080/v1",
+    defaultModel: "mlx-community/Qwen2.5-7B-Instruct",
+    envKey: "",
+  },
+  {
+    id: "ollama",
+    name: "Ollama Local",
+    apiStyle: "openai-compatible",
+    baseUrl: "http://localhost:11434/v1",
+    defaultModel: "qwen2.5:7b",
+    envKey: "",
+  },
+  {
     id: "mock",
     name: "Mock AI (Testing)",
     apiStyle: "openai-compatible",
