@@ -28,7 +28,7 @@ import { hexKey } from "@xpoch/shared";
 
 // === Config ===
 const TICK_MS = parseInt(process.argv[2] ?? "15000", 10);
-const MAP_RADIUS = 10;
+const MAP_RADIUS = 12;
 const AI_TIMEOUT_MS = 45_000;
 
 const OLLAMA_BASE_URL = "http://localhost:11434/v1";

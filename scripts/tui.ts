@@ -29,7 +29,7 @@ const GENERAL_DEF_MAP = new Map<string, GeneralDef>(
 
 // === Config ===
 const TICK_MS = parseInt(process.argv[2] ?? "1500", 10);
-const MAP_RADIUS = 10;
+const MAP_RADIUS = 12;
 
 const FACTIONS = [
   { id: "f0", name: "蜀汉·Claude", modelProvider: "mock", color: "purple", historicalFaction: "shu" as const },

@@ -26,8 +26,11 @@ import {
   GENERAL_POOL,
   GENERALS_PER_FACTION,
   CITY_NAMES,
+  MAP_SIZE,
 } from "@xpoch/shared";
 import { generateMap } from "./map-generator";
+import { generateThreeKingdomsMap, getPresetCities } from "./three-kingdoms-map";
+import type { CityPreset } from "./three-kingdoms-map";
 
 // === Public types ===
 
@@ -167,6 +170,92 @@ function getCityName(
 
 // === State creation ===
 
+/**
+ * Determine whether to use the fixed Three Kingdoms map.
+ * The fixed map is used when all factions have historicalFaction set
+ * and cover shu, wei, wu.
+ */
+function shouldUseThreeKingdomsMap(
+  factionConfigs: readonly FactionConfig[],
+): boolean {
+  const historicalFactions = new Set(
+    factionConfigs.map((cfg) => cfg.historicalFaction).filter(Boolean),
+  );
+  return (
+    historicalFactions.has("shu") &&
+    historicalFactions.has("wei") &&
+    historicalFactions.has("wu")
+  );
+}
+
+/**
+ * Map faction config historicalFaction to the matching factionId.
+ */
+function buildHistoricalFactionMap(
+  factionConfigs: readonly FactionConfig[],
+): ReadonlyMap<HistoricalFaction, FactionId> {
+  const mapping = new Map<HistoricalFaction, FactionId>();
+  for (const cfg of factionConfigs) {
+    if (cfg.historicalFaction) {
+      mapping.set(cfg.historicalFaction, cfg.id);
+    }
+  }
+  return mapping;
+}
+
+/**
+ * Place a single preset city on the map.
+ * Mutates the tiles map (called during initialization only).
+ */
+function placeCityOnTiles(
+  tiles: Map<string, Tile>,
+  cityId: CityId,
+  coord: HexCoord,
+  ownerId: FactionId | null,
+): void {
+  const key = hexKey(coord);
+  const existing = tiles.get(key);
+  if (existing) {
+    tiles.set(key, {
+      ...existing,
+      owner: ownerId,
+      cityId,
+    });
+  }
+}
+
+/**
+ * Mark territory around a faction city (city tile + 6 neighbors).
+ * Mutates the tiles map (called during initialization only).
+ * Returns the territory count.
+ */
+function claimInitialTerritory(
+  tiles: Map<string, Tile>,
+  coord: HexCoord,
+  factionId: FactionId,
+): number {
+  let count = 0;
+
+  // City center is already claimed via placeCityOnTiles
+  const centerTile = tiles.get(hexKey(coord));
+  if (centerTile && centerTile.owner === factionId) {
+    count = 1;
+  }
+
+  // Claim 6 neighbors
+  const neighbors = hexNeighbors(coord);
+  for (const nb of neighbors) {
+    const nbKey = hexKey(nb);
+    const nbTile = tiles.get(nbKey);
+    if (nbTile && nbTile.owner === null) {
+      tiles.set(nbKey, { ...nbTile, owner: factionId });
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
 export function createInitialState(
   mapRadius: number,
   seed: number,
@@ -174,14 +263,17 @@ export function createInitialState(
 ): GameState {
   _resetCounters();
 
-  const rng = createRng(seed + 9999); // offset from map seed
-  const baseTiles = generateMap(mapRadius, seed);
+  const rng = createRng(seed + 9999);
+  const useThreeKingdoms = shouldUseThreeKingdomsMap(factionConfigs);
+
+  const baseTiles = useThreeKingdoms
+    ? generateThreeKingdomsMap()
+    : generateMap(mapRadius, seed);
   const tiles = new Map(baseTiles);
   const factions = new Map<FactionId, Faction>();
   const armies = new Map<ArmyId, Army>();
   const generals = new Map<GeneralId, General>();
   const cities = new Map<CityId, City>();
-  const spawnCoords = pickSpawnPositions(mapRadius, factionConfigs.length);
 
   // Assign generals with historical faction preference
   const factionGeneralMap = assignHistoricalGenerals(
@@ -190,106 +282,204 @@ export function createInitialState(
     rng,
   );
 
-  for (let i = 0; i < factionConfigs.length; i++) {
-    const cfg = factionConfigs[i];
-    const spawn = spawnCoords[i];
+  if (useThreeKingdoms) {
+    // === THREE KINGDOMS FIXED MAP ===
+    const hfMap = buildHistoricalFactionMap(factionConfigs);
+    const presetCities = getPresetCities();
+    const territoryCounts = new Map<FactionId, number>();
 
-    // Assign generals
-    const factionGeneralDefs = factionGeneralMap.get(cfg.id) ?? [];
+    // Initialize territory counts
+    for (const cfg of factionConfigs) {
+      territoryCounts.set(cfg.id, 0);
+    }
 
-    for (const genDef of factionGeneralDefs) {
-      const general: General = {
-        id: genDef.id,
-        defId: genDef.id,
-        factionId: cfg.id,
-        name: genDef.name,
-        level: 1,
-        exp: 0,
-        alive: true,
-        respawnTick: null,
+    // Place all preset cities
+    for (const preset of presetCities) {
+      const ownerFactionId =
+        preset.faction === "neutral"
+          ? "neutral"
+          : hfMap.get(preset.faction) ?? "neutral";
+
+      const cityId = preset.id;
+      const city: City = {
+        id: cityId,
+        factionId: ownerFactionId,
+        name: preset.name,
+        coord: preset.coord,
+        isCapital: preset.isCapital,
+        level: preset.level,
+        walls: preset.isCapital ? 1 : 0,
+        garrison: { ...preset.garrison },
+        trainingQueue: null,
       };
-      generals.set(general.id, general);
+      cities.set(cityId, city);
+
+      // Place city tile
+      placeCityOnTiles(tiles, cityId, preset.coord, ownerFactionId === "neutral" ? null : ownerFactionId);
+
+      // Only claim territory for faction cities (not neutral)
+      if (ownerFactionId !== "neutral") {
+        const claimed = claimInitialTerritory(tiles, preset.coord, ownerFactionId);
+        const prev = territoryCounts.get(ownerFactionId) ?? 0;
+        territoryCounts.set(ownerFactionId, prev + claimed);
+      }
     }
 
-    // Create capital city with themed name
-    const cityId = nextCityId(cfg.id);
-    const capitalName = getCityName(cfg.historicalFaction, 0, true);
-    cities.set(cityId, {
-      id: cityId,
-      factionId: cfg.id,
-      name: capitalName,
-      coord: spawn,
-      isCapital: true,
-      level: 1,
-      walls: 0,
-      garrison: { ...STARTING_GARRISON },
-      trainingQueue: null,
-    });
+    // Set up each faction
+    for (const cfg of factionConfigs) {
+      const factionGeneralDefs = factionGeneralMap.get(cfg.id) ?? [];
 
-    // Ensure city center tile is land and assign to faction + city
-    const spawnKey = hexKey(spawn);
-    const existingCenter = tiles.get(spawnKey);
-    if (existingCenter) {
-      tiles.set(spawnKey, {
-        ...existingCenter,
-        terrain: existingCenter.terrain === "water" ? "plains" : existingCenter.terrain,
-        owner: cfg.id,
-        cityId,
-      });
-    }
-
-    // Mark 6 surrounding tiles as owned by faction (initial territory)
-    const neighbors = hexNeighbors(spawn);
-    for (const nb of neighbors) {
-      const nbKey = hexKey(nb);
-      const nbTile = tiles.get(nbKey);
-      if (nbTile) {
-        tiles.set(nbKey, {
-          ...nbTile,
-          terrain: nbTile.terrain === "water" ? "plains" : nbTile.terrain,
-          owner: cfg.id,
+      // Create generals
+      for (const genDef of factionGeneralDefs) {
+        generals.set(genDef.id, {
+          id: genDef.id,
+          defId: genDef.id,
+          factionId: cfg.id,
+          name: genDef.name,
+          level: 1,
+          exp: 0,
+          alive: true,
+          respawnTick: null,
         });
       }
-    }
 
-    // Count initial territory (city center + up to 6 neighbors)
-    let territoryCount = 1; // city center
-    for (const nb of neighbors) {
-      if (tiles.has(hexKey(nb))) {
-        territoryCount += 1;
+      // Find the capital for this faction
+      const capital = presetCities.find(
+        (p) => p.isCapital && p.faction === cfg.historicalFaction,
+      );
+
+      // Create 1 army led by first general at capital
+      if (factionGeneralDefs.length > 0 && capital) {
+        const firstGeneral = factionGeneralDefs[0];
+        const neighbors = hexNeighbors(capital.coord);
+        const landNeighbors = neighbors.filter((nb) => {
+          const t = tiles.get(hexKey(nb));
+          return t && t.terrain !== "water";
+        });
+        const armyCoord = landNeighbors.length > 0 ? landNeighbors[0] : capital.coord;
+
+        const armyId = nextArmyId(cfg.id);
+        armies.set(armyId, {
+          id: armyId,
+          factionId: cfg.id,
+          generalId: firstGeneral.id,
+          troops: { ...STARTING_ARMY_TROOPS },
+          coord: armyCoord,
+          target: null,
+          state: "idle",
+        });
       }
+
+      // Create faction
+      factions.set(cfg.id, {
+        id: cfg.id,
+        name: cfg.name,
+        modelProvider: cfg.modelProvider,
+        color: cfg.color,
+        resources: { ...STARTING_RESOURCES },
+        techs: [],
+        alive: true,
+        territoryCount: territoryCounts.get(cfg.id) ?? 0,
+      });
     }
+  } else {
+    // === LEGACY RANDOM MAP ===
+    const spawnCoords = pickSpawnPositions(mapRadius, factionConfigs.length);
 
-    // Create 1 army led by first general near capital
-    const firstGeneral = factionGeneralDefs[0];
-    const landNeighbors = neighbors.filter((nb) => tiles.has(hexKey(nb)));
-    const armyCoord = landNeighbors.length > 0 ? landNeighbors[0] : spawn;
+    for (let i = 0; i < factionConfigs.length; i++) {
+      const cfg = factionConfigs[i];
+      const spawn = spawnCoords[i];
 
-    const armyId = nextArmyId(cfg.id);
-    armies.set(armyId, {
-      id: armyId,
-      factionId: cfg.id,
-      generalId: firstGeneral.id,
-      troops: { ...STARTING_ARMY_TROOPS },
-      coord: armyCoord,
-      target: null,
-      state: "idle",
-    });
+      const factionGeneralDefs = factionGeneralMap.get(cfg.id) ?? [];
 
-    // Create faction
-    factions.set(cfg.id, {
-      id: cfg.id,
-      name: cfg.name,
-      modelProvider: cfg.modelProvider,
-      color: cfg.color,
-      resources: { ...STARTING_RESOURCES },
-      techs: [],
-      alive: true,
-      territoryCount,
-    });
+      for (const genDef of factionGeneralDefs) {
+        generals.set(genDef.id, {
+          id: genDef.id,
+          defId: genDef.id,
+          factionId: cfg.id,
+          name: genDef.name,
+          level: 1,
+          exp: 0,
+          alive: true,
+          respawnTick: null,
+        });
+      }
+
+      const cityId = nextCityId(cfg.id);
+      const capitalName = getCityName(cfg.historicalFaction, 0, true);
+      cities.set(cityId, {
+        id: cityId,
+        factionId: cfg.id,
+        name: capitalName,
+        coord: spawn,
+        isCapital: true,
+        level: 1,
+        walls: 0,
+        garrison: { ...STARTING_GARRISON },
+        trainingQueue: null,
+      });
+
+      const spawnKey = hexKey(spawn);
+      const existingCenter = tiles.get(spawnKey);
+      if (existingCenter) {
+        tiles.set(spawnKey, {
+          ...existingCenter,
+          terrain: existingCenter.terrain === "water" ? "plains" : existingCenter.terrain,
+          owner: cfg.id,
+          cityId,
+        });
+      }
+
+      const neighbors = hexNeighbors(spawn);
+      for (const nb of neighbors) {
+        const nbKey = hexKey(nb);
+        const nbTile = tiles.get(nbKey);
+        if (nbTile) {
+          tiles.set(nbKey, {
+            ...nbTile,
+            terrain: nbTile.terrain === "water" ? "plains" : nbTile.terrain,
+            owner: cfg.id,
+          });
+        }
+      }
+
+      let territoryCount = 1;
+      for (const nb of neighbors) {
+        if (tiles.has(hexKey(nb))) {
+          territoryCount += 1;
+        }
+      }
+
+      const firstGeneral = factionGeneralDefs[0];
+      const landNeighbors = neighbors.filter((nb) => tiles.has(hexKey(nb)));
+      const armyCoord = landNeighbors.length > 0 ? landNeighbors[0] : spawn;
+
+      const armyId = nextArmyId(cfg.id);
+      armies.set(armyId, {
+        id: armyId,
+        factionId: cfg.id,
+        generalId: firstGeneral.id,
+        troops: { ...STARTING_ARMY_TROOPS },
+        coord: armyCoord,
+        target: null,
+        state: "idle",
+      });
+
+      factions.set(cfg.id, {
+        id: cfg.id,
+        name: cfg.name,
+        modelProvider: cfg.modelProvider,
+        color: cfg.color,
+        resources: { ...STARTING_RESOURCES },
+        techs: [],
+        alive: true,
+        territoryCount,
+      });
+    }
   }
 
   const diplomacy: DiplomacyState = { relations: new Map() };
+  const effectiveMapSize = useThreeKingdoms ? MAP_SIZE : mapRadius;
 
   return {
     tick: 0,
@@ -301,7 +491,7 @@ export function createInitialState(
     diplomacy,
     log: [],
     winner: null,
-    mapSize: mapRadius,
+    mapSize: effectiveMapSize,
   };
 }
 

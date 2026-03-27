@@ -1,5 +1,6 @@
 export * from "./game-state";
 export * from "./map-generator";
+export * from "./three-kingdoms-map";
 export * from "./territory";
 export * from "./action-validator";
 export * from "./action-executor";

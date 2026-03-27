@@ -39,7 +39,13 @@ const ONE_FACTION: readonly FactionConfig[] = [
   { id: "f1", name: "Alpha", modelProvider: "mock", color: "#ff0000" },
 ];
 
-describe("createInitialState", () => {
+const THREE_KINGDOMS_FACTIONS: readonly FactionConfig[] = [
+  { id: "f0", name: "蜀汉", modelProvider: "mock", color: "purple", historicalFaction: "shu" as const },
+  { id: "f1", name: "魏国", modelProvider: "mock", color: "green", historicalFaction: "wei" as const },
+  { id: "f2", name: "吴国", modelProvider: "mock", color: "blue", historicalFaction: "wu" as const },
+];
+
+describe("createInitialState (legacy random map)", () => {
   it("creates state with correct number of factions", () => {
     const state = createInitialState(5, 42, TWO_FACTIONS);
     expect(state.factions.size).toBe(2);
@@ -78,7 +84,7 @@ describe("createInitialState", () => {
     expect(f2Cities).toHaveLength(1);
   });
 
-  it("assigns 3 generals per faction with no duplicates", () => {
+  it("assigns generals per faction with no duplicates", () => {
     const state = createInitialState(5, 42, TWO_FACTIONS);
 
     const f1Generals = getFactionGenerals(state, "f1");
@@ -86,14 +92,12 @@ describe("createInitialState", () => {
     expect(f1Generals).toHaveLength(GENERALS_PER_FACTION);
     expect(f2Generals).toHaveLength(GENERALS_PER_FACTION);
 
-    // No duplicate generals across factions
     const f1Ids = new Set(f1Generals.map((g) => g.id));
     const f2Ids = new Set(f2Generals.map((g) => g.id));
     for (const id of f1Ids) {
       expect(f2Ids.has(id)).toBe(false);
     }
 
-    // All generals are alive and level 1
     for (const general of state.generals.values()) {
       expect(general.alive).toBe(true);
       expect(general.level).toBe(1);
@@ -114,7 +118,6 @@ describe("createInitialState", () => {
       expect(army.troops).toEqual(STARTING_ARMY_TROOPS);
       expect(army.state).toBe("idle");
       expect(army.target).toBeNull();
-      // General must belong to same faction
       const general = state.generals.get(army.generalId);
       expect(general).toBeDefined();
       expect(general?.factionId).toBe(army.factionId);
@@ -129,7 +132,6 @@ describe("createInitialState", () => {
     expect(centerTile?.cityId).toBe(city.id);
     expect(centerTile?.owner).toBe("f1");
 
-    // Check surrounding tiles are owned
     let ownedNeighborCount = 0;
     const neighbors = hexNeighbors(city.coord);
     for (const nb of neighbors) {
@@ -153,7 +155,6 @@ describe("createInitialState", () => {
   it("faction territoryCount reflects initial territory", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
     const faction = state.factions.get("f1")!;
-    // At least 1 (city center), at most 7 (center + 6 neighbors)
     expect(faction.territoryCount).toBeGreaterThanOrEqual(1);
     expect(faction.territoryCount).toBeLessThanOrEqual(7);
   });
@@ -162,9 +163,111 @@ describe("createInitialState", () => {
     const state = createInitialState(5, 42, ONE_FACTION);
     const allGenerals = getFactionGenerals(state, "f1");
     const available = getAvailableGenerals(state, "f1");
-
-    // 1 general is leading the starting army
     expect(available).toHaveLength(allGenerals.length - 1);
+  });
+});
+
+describe("createInitialState (Three Kingdoms fixed map)", () => {
+  it("creates state with 3 factions", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    expect(state.factions.size).toBe(3);
+  });
+
+  it("has all 25 preset cities", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    expect(state.cities.size).toBe(25);
+  });
+
+  it("has 469 tiles (radius 12)", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    expect(state.tiles.size).toBe(469);
+  });
+
+  it("each faction has its preset cities", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+
+    const shuCities = getFactionCities(state, "f0");
+    const weiCities = getFactionCities(state, "f1");
+    const wuCities = getFactionCities(state, "f2");
+
+    // Shu: 成都(capital), 绵竹, 剑阁
+    expect(shuCities).toHaveLength(3);
+    expect(shuCities.some((c) => c.name === "成都" && c.isCapital)).toBe(true);
+
+    // Wei: 邺城(capital), 许昌
+    // Note: 濮阳 is neutral in the preset
+    expect(weiCities).toHaveLength(2);
+    expect(weiCities.some((c) => c.name === "邺城" && c.isCapital)).toBe(true);
+
+    // Wu: 建业(capital), 武昌, 会稽
+    expect(wuCities).toHaveLength(3);
+    expect(wuCities.some((c) => c.name === "建业" && c.isCapital)).toBe(true);
+  });
+
+  it("neutral cities have garrisons", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    const neutralCities = [...state.cities.values()].filter((c) => c.factionId === "neutral");
+    expect(neutralCities.length).toBeGreaterThan(0);
+
+    for (const city of neutralCities) {
+      const total = city.garrison.infantry + city.garrison.cavalry + city.garrison.archer;
+      expect(total).toBeGreaterThan(0);
+    }
+  });
+
+  it("faction generals are correctly assigned by historicalFaction", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+
+    const shuGenerals = getFactionGenerals(state, "f0");
+    const weiGenerals = getFactionGenerals(state, "f1");
+    const wuGenerals = getFactionGenerals(state, "f2");
+
+    expect(shuGenerals).toHaveLength(GENERALS_PER_FACTION);
+    expect(weiGenerals).toHaveLength(GENERALS_PER_FACTION);
+    expect(wuGenerals).toHaveLength(GENERALS_PER_FACTION);
+
+    // No duplicates across factions
+    const allIds = new Set([
+      ...shuGenerals.map((g) => g.id),
+      ...weiGenerals.map((g) => g.id),
+      ...wuGenerals.map((g) => g.id),
+    ]);
+    expect(allIds.size).toBe(GENERALS_PER_FACTION * 3);
+  });
+
+  it("each faction has 1 army", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    for (const cfg of THREE_KINGDOMS_FACTIONS) {
+      const armies = getFactionArmies(state, cfg.id);
+      expect(armies).toHaveLength(1);
+    }
+  });
+
+  it("faction territory includes capital + neighbors", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    for (const cfg of THREE_KINGDOMS_FACTIONS) {
+      const faction = state.factions.get(cfg.id)!;
+      // Each faction has multiple cities, each claiming territory
+      expect(faction.territoryCount).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("capital cities have level 3 and walls 1", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    const capitals = [...state.cities.values()].filter((c) => c.isCapital);
+    expect(capitals).toHaveLength(3);
+    for (const c of capitals) {
+      expect(c.level).toBe(3);
+      expect(c.walls).toBe(1);
+    }
+  });
+
+  it("洛阳 is a neutral city at (0,0)", () => {
+    const state = createInitialState(12, 42, THREE_KINGDOMS_FACTIONS);
+    const luoyang = [...state.cities.values()].find((c) => c.name === "洛阳");
+    expect(luoyang).toBeDefined();
+    expect(luoyang!.factionId).toBe("neutral");
+    expect(luoyang!.coord).toEqual({ q: 0, r: 0 });
   });
 });
 

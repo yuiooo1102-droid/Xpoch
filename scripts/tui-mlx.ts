@@ -33,7 +33,7 @@ import { hexKey, GENERAL_POOL } from "@xpoch/shared";
 
 // === Config ===
 const TICK_MS = parseInt(process.argv[2] ?? "8000", 10);
-const MAP_RADIUS = 10;
+const MAP_RADIUS = 12;
 const MLX_URL = process.argv[3] ?? "http://localhost:8081";
 const MLX_MODEL = process.argv[4] ?? "mlx-community/Qwen2.5-3B-Instruct-4bit";
 const AI_TIMEOUT_MS = 15_000;
