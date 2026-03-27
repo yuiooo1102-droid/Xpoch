@@ -16,8 +16,8 @@ export interface CityPreset {
 
 // === Preset Cities (from Three Kingdoms design doc) ===
 
-const LARGE_GARRISON = { infantry: 500, cavalry: 200, archer: 200 } as const;
-const MEDIUM_GARRISON = { infantry: 300, cavalry: 100, archer: 100 } as const;
+const LARGE_GARRISON = { infantry: 300, cavalry: 100, archer: 100 } as const;
+const MEDIUM_GARRISON = { infantry: 150, cavalry: 50, archer: 50 } as const;
 
 const PRESET_CITIES: readonly CityPreset[] = [
   // Large cities (level 3)

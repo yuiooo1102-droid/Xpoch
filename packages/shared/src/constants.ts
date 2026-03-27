@@ -167,7 +167,7 @@ export const WALL_UPGRADE_COST: Resources = { gold: 10, food: 0, wood: 10, iron:
 // === Territory ===
 export const BASE_GOLD_PER_TILE = 1;
 export const FOOD_PER_100_TROOPS = 1;
-export const MAX_ARMIES_PER_FACTION = 3; // limited by generals
+export const MAX_ARMIES_PER_FACTION = 5; // limited by generals
 
 // === Buildings ===
 export interface BuildingDef {
