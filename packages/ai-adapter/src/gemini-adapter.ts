@@ -27,7 +27,7 @@ export class GeminiAdapter implements AIAdapter {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 1024 },
+        generationConfig: { maxOutputTokens: 2048 },
       }),
     });
 

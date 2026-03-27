@@ -92,13 +92,7 @@ ACTIONS PER TICK:
   4. research: learn one tech (costs resources)
   5. diplomacy: declare_war / propose_alliance / offer_peace
 
-STRATEGY TIPS:
-  - Build farms early to avoid starvation
-  - Balance troop types against enemy composition
-  - Use cavalry for fast raids, infantry for defense, archers for trump advantage
-  - Expand territory for more resource income
-  - Research techs that counter enemy strategy
-  - Don't attack cities with fewer troops than the garrison + defense bonus`;
+You decide your own strategy. Analyze the situation and act.`;
 
 // === RESPONSE FORMAT ===
 
