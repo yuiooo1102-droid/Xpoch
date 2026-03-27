@@ -249,6 +249,8 @@ function getBuildableTiles(
   state: GameState,
   factionId: FactionId,
 ): readonly BuildableSummary[] {
+  const faction = state.factions.get(factionId);
+  const factionTechs = faction?.techs ?? [];
   const counts = new Map<TerrainType, { count: number; sampleHex: { q: number; r: number } }>();
 
   for (const tile of state.tiles.values()) {
@@ -256,6 +258,11 @@ function getBuildableTiles(
     if (tile.building !== null) continue;
     if (tile.cityId !== null) continue;
     if (tile.terrain === "water") continue;
+
+    // Only include if the corresponding building's tech requirement is met
+    const buildingType = TERRAIN_TO_BUILDING.get(tile.terrain) ?? "market";
+    const bDef = BUILDING_DEFS[buildingType as keyof typeof BUILDING_DEFS];
+    if (bDef?.requiresTech && !factionTechs.includes(bDef.requiresTech)) continue;
 
     const existing = counts.get(tile.terrain);
     if (existing) {

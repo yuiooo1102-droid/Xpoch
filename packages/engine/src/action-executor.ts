@@ -498,6 +498,9 @@ function executeTrainTroops(
   const city = state.cities.get(order.cityId);
   if (!city || !order.troopType) return state;
 
+  // Skip if already training
+  if (city.trainingQueue !== null) return state;
+
   const stats = TROOP_STATS[order.troopType];
   const amount = order.amount ?? 100;
   const batchCount = amount / 100;

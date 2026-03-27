@@ -163,7 +163,7 @@ export function validateCityOrder(
       if (!stats) return fail(`Unknown troop type: ${order.troopType}`);
 
       if (city.trainingQueue !== null) {
-        return fail("City already has a training queue");
+        return OK; // silently accept — city continues existing queue
       }
 
       // Check resource cost: trainCost is per 100 troops

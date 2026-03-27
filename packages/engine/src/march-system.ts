@@ -1,5 +1,5 @@
 import type { GameState, ArmyId, HexCoord } from "@xpoch/shared";
-import { hexDistance } from "@xpoch/shared";
+import { hexDistance, hexKey } from "@xpoch/shared";
 import { getGeneralDef } from "./general-manager";
 
 // === Helpers ===
@@ -76,14 +76,22 @@ export function processMarches(state: GameState): GameState {
     const generalDef = general ? getGeneralDef(general.defId) : undefined;
     const speed = generalDef ? generalDef.baseSpeed : 1;
 
-    const newCoord = moveToward(army.coord, army.target, speed);
+    const rawCoord = moveToward(army.coord, army.target, speed);
+
+    // Avoid water tiles — stay in place if next step is water
+    const targetTile = state.tiles.get(hexKey(rawCoord));
+    const isWater = targetTile?.terrain === "water";
+    const newCoord = (!isWater) ? rawCoord : army.coord;
     const arrived = hexDistance(newCoord, army.target) === 0;
+
+    // If stuck (didn't move), cancel march
+    const stuck = newCoord.q === army.coord.q && newCoord.r === army.coord.r && !arrived;
 
     newArmies.set(id, {
       ...army,
       coord: newCoord,
-      state: arrived ? ("idle" as const) : ("marching" as const),
-      target: arrived ? null : army.target,
+      state: (arrived || stuck) ? ("idle" as const) : ("marching" as const),
+      target: (arrived || stuck) ? null : army.target,
     });
     changed = true;
   }
