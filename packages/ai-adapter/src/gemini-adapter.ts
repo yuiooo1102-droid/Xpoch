@@ -33,7 +33,7 @@ export class GeminiAdapter implements AIAdapter {
 
     const data = await response.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    const decision = parseAIResponse(text, factionId);
+    const decision = parseAIResponse(text, factionId, state);
     return remapIds(decision, idMap);
   }
 }

@@ -29,7 +29,7 @@ export class ClaudeAdapter implements AIAdapter {
 
     const text =
       response.content[0].type === "text" ? response.content[0].text : "";
-    const decision = parseAIResponse(text, factionId);
+    const decision = parseAIResponse(text, factionId, state);
     return remapIds(decision, idMap);
   }
 }

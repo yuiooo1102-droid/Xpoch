@@ -239,7 +239,7 @@ async function main(): Promise<void> {
         const prompt = buildPrompt(state, faction.id);
         const idMap = buildIdMap(state, faction.id);
         const text = await callMLX(prompt, faction.name);
-        const decision = remapIds(parseAIResponse(text, faction.id), idMap);
+        const decision = remapIds(parseAIResponse(text, faction.id, state), idMap);
         state = executeTurnDecision(state, decision);
       } catch {
         // skip on error

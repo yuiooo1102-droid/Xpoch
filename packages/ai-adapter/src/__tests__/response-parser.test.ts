@@ -115,4 +115,59 @@ describe("parseAIResponse", () => {
     expect(decision.research).toBeNull();
     expect(decision.diplomacy).toEqual([]);
   });
+
+  it("resolves Chinese general names to IDs", () => {
+    const raw = JSON.stringify({
+      armies: [
+        { generalId: "吕布", action: "march", target: { q: 1, r: 0 } },
+        { generalId: "关羽", action: "attack", target: { q: 2, r: -1 } },
+      ],
+      cities: [],
+      build: [],
+      research: null,
+      diplomacy: [],
+    });
+
+    const decision = parseAIResponse(raw, "f1");
+    expect(decision.armies).toHaveLength(2);
+    expect(decision.armies[0].generalId).toBe("lubu");
+    expect(decision.armies[1].generalId).toBe("guanyu");
+  });
+
+  it("resolves Chinese city names to IDs when state provided", () => {
+    const mockState = {
+      cities: new Map([
+        ["f1-city-1", { id: "f1-city-1", name: "成都", factionId: "f1" }],
+        ["f2-city-1", { id: "f2-city-1", name: "建业", factionId: "f2" }],
+      ]),
+    } as any;
+
+    const raw = JSON.stringify({
+      armies: [],
+      cities: [
+        { cityId: "成都", action: "train", troopType: "infantry", amount: 100 },
+      ],
+      build: [],
+      research: null,
+      diplomacy: [],
+    });
+
+    const decision = parseAIResponse(raw, "f1", mockState);
+    expect(decision.cities).toHaveLength(1);
+    expect(decision.cities[0].cityId).toBe("f1-city-1");
+  });
+
+  it("keeps valid IDs unchanged when resolving names", () => {
+    const raw = JSON.stringify({
+      armies: [{ generalId: "lubu", action: "idle" }],
+      cities: [{ cityId: "f1-city-1", action: "idle" }],
+      build: [],
+      research: null,
+      diplomacy: [],
+    });
+
+    const decision = parseAIResponse(raw, "f1");
+    expect(decision.armies[0].generalId).toBe("lubu");
+    expect(decision.cities[0].cityId).toBe("f1-city-1");
+  });
 });

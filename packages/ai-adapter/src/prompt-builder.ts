@@ -5,6 +5,8 @@ import type {
   Army,
   General,
   GeneralDef,
+  Tile,
+  TerrainType,
 } from "@xpoch/shared";
 import {
   hexKey, hexDistance, hexDisk,
@@ -28,6 +30,7 @@ export function buildPrompt(state: GameState, factionId: FactionId): string {
   const cities = getFactionCities(state, factionId);
   const armies = getFactionArmies(state, factionId);
   const generals = getFactionGenerals(state, factionId);
+  const buildableTiles = getBuildableTiles(state, factionId);
 
   return [
     RULES_SECTION,
@@ -38,12 +41,13 @@ export function buildPrompt(state: GameState, factionId: FactionId): string {
     compactGenerals(generals),
     compactArmies(armies, state),
     compactCities(cities),
+    compactBuildable(buildableTiles),
     compactTech(f.techs),
     compactThreats(state, factionId, cities, armies),
     compactDiplomacy(state, factionId),
     "",
     "===== YOUR DECISION =====",
-    RESPONSE_FORMAT,
+    buildResponseFormat(generals, cities, buildableTiles),
   ].join("\n");
 }
 
@@ -96,15 +100,33 @@ You decide your own strategy. Analyze the situation and act.`;
 
 // === RESPONSE FORMAT ===
 
-const RESPONSE_FORMAT = `Respond with JSON ONLY, no explanation:
-{
-  "armies": [{"generalId":"将领ID", "action":"march|attack|retreat|garrison|idle", "target":{"q":0,"r":0}}],
-  "cities": [{"cityId":"城市ID", "action":"train|upgrade_walls|upgrade_city|idle", "troopType":"infantry|cavalry|archer", "amount":100}],
-  "build": [{"hex":{"q":0,"r":0}, "building":"farm|lumber_mill|mine|market|barracks|watchtower|fortress"}],
-  "research": "tech_id_or_null",
-  "diplomacy": [{"action":"declare_war|propose_alliance|offer_peace", "targetFactionId":"faction_id"}]
+interface BuildableSummary {
+  readonly terrain: TerrainType;
+  readonly count: number;
+  readonly building: string;
+  readonly sampleHex: { readonly q: number; readonly r: number };
 }
+
+function buildResponseFormat(
+  generals: readonly General[],
+  cities: readonly City[],
+  buildable: readonly BuildableSummary[],
+): string {
+  const genId = generals[0]?.id ?? "generalId";
+  const cityId = cities[0]?.id ?? "cityId";
+  const exampleBuild = buildable.find((b) => b.building === "farm" || b.building === "lumber_mill") ?? buildable[0];
+  const buildJson = exampleBuild
+    ? `{"hex":{"q":${exampleBuild.sampleHex.q},"r":${exampleBuild.sampleHex.r}},"building":"${exampleBuild.building}"}`
+    : "";
+
+  return `Respond with JSON ONLY, no explanation.
+IMPORTANT: Use the exact IDs shown above. Do NOT use Chinese names as IDs.
+IMPORTANT: Pick ONE action per entry. Do NOT write "march|attack" — choose one.
+Example (adapt to your situation):
+{"armies":[{"generalId":"${genId}","action":"march","target":{"q":1,"r":0}}],"cities":[{"cityId":"${cityId}","action":"train","troopType":"cavalry","amount":100}],"build":[${buildJson}],"research":"agriculture","diplomacy":[]}
+Valid actions — armies: march, attack, retreat, garrison, idle | cities: train, upgrade_walls, upgrade_city, idle | troopType: infantry, cavalry, archer
 /no_think`;
+}
 
 // === STATE SECTIONS ===
 
@@ -122,9 +144,9 @@ function compactGenerals(generals: readonly General[]): string {
     const spec = def?.specialty ?? "all";
     const atk = def?.baseAttack ?? 0;
     const def2 = def?.baseDefense ?? 0;
-    return `  ${g.name}[${g.id}] ${spec} atk${atk}/def${def2} ${status} 技:${skill}`;
+    return `  ${g.name}[ID:${g.id}] ${spec} atk${atk}/def${def2} ${status} 技:${skill}`;
   });
-  return `GENERALS(${generals.length}):\n${lines.join("\n")}`;
+  return `GENERALS(${generals.length}) — use the ID (e.g. "${generals[0]?.id ?? "xxx"}") in generalId field:\n${lines.join("\n")}`;
 }
 
 function compactArmies(armies: readonly Army[], state: GameState): string {
@@ -135,7 +157,7 @@ function compactArmies(armies: readonly Army[], state: GameState): string {
     const marchInfo = a.state === "marching" && a.target
       ? ` →${hexKey(a.target)}`
       : "";
-    return `  ${gen?.name ?? "?"}@${hexKey(a.coord)} 步${a.troops.infantry}/骑${a.troops.cavalry}/弓${a.troops.archer}(${total}) [${a.state}${marchInfo}]`;
+    return `  generalId:${a.generalId} (${gen?.name ?? "?"})@${hexKey(a.coord)} 步${a.troops.infantry}/骑${a.troops.cavalry}/弓${a.troops.archer}(${total}) [${a.state}${marchInfo}]`;
   });
   return `ARMIES(${armies.length}):\n${lines.join("\n")}`;
 }
@@ -147,9 +169,9 @@ function compactCities(cities: readonly City[]): string {
     const training = c.trainingQueue
       ? `训练:${c.trainingQueue.troopType}×${c.trainingQueue.amount}(${c.trainingQueue.ticksRemaining}t)`
       : "";
-    return `  ${cap}${c.name}[${c.id}]@${hexKey(c.coord)} Lv${c.level} 墙${c.walls} 驻军${garTotal}(步${c.garrison.infantry}/骑${c.garrison.cavalry}/弓${c.garrison.archer}) ${training}`;
+    return `  ${cap}${c.name}[ID:${c.id}]@${hexKey(c.coord)} Lv${c.level} 墙${c.walls} 驻军${garTotal}(步${c.garrison.infantry}/骑${c.garrison.cavalry}/弓${c.garrison.archer}) ${training}`;
   });
-  return `CITIES(${cities.length}):\n${lines.join("\n")}`;
+  return `CITIES(${cities.length}) — use the ID (e.g. "${cities[0]?.id ?? "xxx"}") in cityId field:\n${lines.join("\n")}`;
 }
 
 function compactTech(techs: readonly string[]): string {
@@ -212,6 +234,53 @@ function compactDiplomacy(state: GameState, factionId: FactionId): string {
     }
   }
   return rels.length > 0 ? `DIPLOMACY: ${rels.join(" ")}` : "DIPLOMACY: 无外交关系";
+}
+
+// === Buildable tiles ===
+
+const TERRAIN_TO_BUILDING: ReadonlyMap<TerrainType, string> = new Map([
+  ["plains", "farm"],
+  ["forest", "lumber_mill"],
+  ["mountain", "mine"],
+  ["desert", "market"],
+]);
+
+function getBuildableTiles(
+  state: GameState,
+  factionId: FactionId,
+): readonly BuildableSummary[] {
+  const counts = new Map<TerrainType, { count: number; sampleHex: { q: number; r: number } }>();
+
+  for (const tile of state.tiles.values()) {
+    if (tile.owner !== factionId) continue;
+    if (tile.building !== null) continue;
+    if (tile.cityId !== null) continue;
+    if (tile.terrain === "water") continue;
+
+    const existing = counts.get(tile.terrain);
+    if (existing) {
+      counts.set(tile.terrain, { count: existing.count + 1, sampleHex: existing.sampleHex });
+    } else {
+      counts.set(tile.terrain, { count: 1, sampleHex: { q: tile.coord.q, r: tile.coord.r } });
+    }
+  }
+
+  const result: BuildableSummary[] = [];
+  for (const [terrain, data] of counts) {
+    const building = TERRAIN_TO_BUILDING.get(terrain) ?? "market";
+    result.push({ terrain, count: data.count, building, sampleHex: data.sampleHex });
+  }
+  return result;
+}
+
+function compactBuildable(buildable: readonly BuildableSummary[]): string {
+  if (buildable.length === 0) return "BUILDABLE TILES: none";
+  const lines = buildable.map((b) => {
+    const def = BUILDING_DEFS[b.building as keyof typeof BUILDING_DEFS];
+    const techNote = def?.requiresTech ? ` (needs tech:${def.requiresTech})` : "";
+    return `  ${b.terrain}×${b.count} → build ${b.building}${techNote} (e.g. hex {"q":${b.sampleHex.q},"r":${b.sampleHex.r}})`;
+  });
+  return `BUILDABLE TILES (empty owned tiles where you can build):\n${lines.join("\n")}`;
 }
 
 // === Helpers ===

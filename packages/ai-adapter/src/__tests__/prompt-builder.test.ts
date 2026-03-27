@@ -53,11 +53,27 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("ENEMIES");
   });
 
-  it("includes JSON response format", () => {
+  it("includes JSON response format with real IDs", () => {
     const prompt = buildPrompt(state, "f1");
     expect(prompt).toContain("JSON");
     expect(prompt).toContain("march");
     expect(prompt).toContain("attack");
     expect(prompt).toContain("train");
+    expect(prompt).toContain("Do NOT use Chinese names as IDs");
+  });
+
+  it("shows general IDs with ID: prefix", () => {
+    const prompt = buildPrompt(state, "f1");
+    expect(prompt).toMatch(/\[ID:[a-z]+\]/);
+  });
+
+  it("shows city IDs with ID: prefix", () => {
+    const prompt = buildPrompt(state, "f1");
+    expect(prompt).toMatch(/\[ID:f1-city-\d+\]/);
+  });
+
+  it("includes buildable tiles section", () => {
+    const prompt = buildPrompt(state, "f1");
+    expect(prompt).toContain("BUILDABLE TILES");
   });
 });

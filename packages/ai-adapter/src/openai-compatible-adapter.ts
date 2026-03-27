@@ -30,7 +30,7 @@ export class OpenAICompatibleAdapter implements AIAdapter {
       ? await this.callOllamaNative(prompt)
       : await this.callOpenAICompat(prompt);
 
-    const decision = parseAIResponse(text, factionId);
+    const decision = parseAIResponse(text, factionId, state);
     return remapIds(decision, idMap);
   }
 

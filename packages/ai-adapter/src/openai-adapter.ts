@@ -26,6 +26,6 @@ export class OpenAIAdapter implements AIAdapter {
     });
 
     const text = response.choices[0]?.message?.content ?? "";
-    return parseAIResponse(text, factionId);
+    return parseAIResponse(text, factionId, state);
   }
 }

@@ -7,7 +7,9 @@ import type {
   DiplomacyOrder,
   HexCoord,
   TroopType,
+  GameState,
 } from "@xpoch/shared";
+import { GENERAL_POOL } from "@xpoch/shared";
 
 interface RawArmyOrder {
   general_id?: string;
@@ -47,6 +49,26 @@ interface RawTurnDecision {
   diplomacy?: readonly RawDiplomacyOrder[];
 }
 
+/** Map Chinese general names to their IDs for fallback resolution */
+const GENERAL_NAME_TO_ID = new Map<string, string>(
+  GENERAL_POOL.map((g) => [g.name, g.id]),
+);
+
+/** Resolve a generalId that might be a Chinese name to the actual ID */
+function resolveGeneralId(raw: string): string {
+  return GENERAL_NAME_TO_ID.get(raw) ?? raw;
+}
+
+/** Build a city name → ID map from the current game state */
+function buildCityNameMap(state: GameState | undefined): ReadonlyMap<string, string> {
+  if (!state) return new Map();
+  const map = new Map<string, string>();
+  for (const city of state.cities.values()) {
+    map.set(city.name, city.id);
+  }
+  return map;
+}
+
 const VALID_ARMY_ACTIONS = new Set(["march", "attack", "retreat", "garrison", "idle"]);
 const VALID_CITY_ACTIONS = new Set(["train", "upgrade_walls", "upgrade_city", "idle"]);
 const VALID_DIPLOMACY_ACTIONS = new Set([
@@ -64,6 +86,7 @@ const VALID_BUILDINGS = new Set([
 export function parseAIResponse(
   raw: string,
   factionId: FactionId,
+  state?: GameState,
 ): TurnDecision {
   const passDecision: TurnDecision = {
     factionId,
@@ -82,8 +105,9 @@ export function parseAIResponse(
       return passDecision;
     }
 
+    const cityNameMap = buildCityNameMap(state);
     const armies = parseArmyOrders(parsed.armies);
-    const cities = parseCityOrders(parsed.cities);
+    const cities = parseCityOrders(parsed.cities, cityNameMap);
     const build = parseBuildOrders(parsed.build);
     const research = typeof parsed.research === "string" ? parsed.research : null;
     const diplomacy = parseDiplomacyOrders(parsed.diplomacy);
@@ -112,8 +136,10 @@ function parseArmyOrders(
 }
 
 function parseSingleArmyOrder(raw: RawArmyOrder): ArmyOrder | null {
-  const generalId = raw.general_id ?? raw.generalId;
-  if (!generalId || typeof generalId !== "string") return null;
+  const rawGeneralId = raw.general_id ?? raw.generalId;
+  if (!rawGeneralId || typeof rawGeneralId !== "string") return null;
+
+  const generalId = resolveGeneralId(rawGeneralId);
 
   const action = raw.action;
   if (!action || !VALID_ARMY_ACTIONS.has(action)) return null;
@@ -129,17 +155,23 @@ function parseSingleArmyOrder(raw: RawArmyOrder): ArmyOrder | null {
 
 function parseCityOrders(
   raw: readonly RawCityOrder[] | undefined,
+  cityNameMap: ReadonlyMap<string, string>,
 ): readonly CityOrder[] {
   if (!Array.isArray(raw)) return [];
 
   return raw
-    .map(parseSingleCityOrder)
+    .map((o) => parseSingleCityOrder(o, cityNameMap))
     .filter((o): o is CityOrder => o !== null);
 }
 
-function parseSingleCityOrder(raw: RawCityOrder): CityOrder | null {
-  const cityId = raw.city_id ?? raw.cityId;
-  if (!cityId || typeof cityId !== "string") return null;
+function parseSingleCityOrder(
+  raw: RawCityOrder,
+  cityNameMap: ReadonlyMap<string, string>,
+): CityOrder | null {
+  const rawCityId = raw.city_id ?? raw.cityId;
+  if (!rawCityId || typeof rawCityId !== "string") return null;
+  // Fallback: if rawCityId is a Chinese city name, resolve to actual ID
+  const cityId = cityNameMap.get(rawCityId) ?? rawCityId;
 
   const action = raw.action;
   if (!action || !VALID_CITY_ACTIONS.has(action)) return null;
