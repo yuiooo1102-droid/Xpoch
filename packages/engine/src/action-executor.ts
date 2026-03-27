@@ -32,12 +32,14 @@ import {
 import {
   updateFaction,
   addLogEntry,
+  addArmy,
   updateArmy,
   removeArmy,
   updateCity,
   setTile,
   getFactionCities,
   getCityAt,
+  nextArmyId,
 } from "./game-state";
 import {
   validateArmyOrder,
@@ -477,6 +479,9 @@ function executeCityOrder(
     case "upgrade_city":
       return executeUpgradeCity(state, order, factionId);
 
+    case "deploy":
+      return executeDeployArmy(state, order, factionId);
+
     case "idle":
       return state;
 
@@ -585,6 +590,51 @@ function executeUpgradeCity(
   s = addLogEntry(
     s,
     `${city.name} upgraded to level ${city.level + 1}.`,
+    "city",
+    [factionId],
+  );
+
+  return s;
+}
+
+function executeDeployArmy(
+  state: GameState,
+  order: CityOrder,
+  factionId: FactionId,
+): GameState {
+  const city = state.cities.get(order.cityId);
+  if (!city || !order.generalId || !order.troops) return state;
+
+  const deployTroops: Troops = {
+    infantry: order.troops.infantry ?? 0,
+    cavalry: order.troops.cavalry ?? 0,
+    archer: order.troops.archer ?? 0,
+  };
+
+  // Subtract from garrison
+  const newGarrison: Troops = {
+    infantry: city.garrison.infantry - deployTroops.infantry,
+    cavalry: city.garrison.cavalry - deployTroops.cavalry,
+    archer: city.garrison.archer - deployTroops.archer,
+  };
+
+  let s = updateCity(state, order.cityId, { garrison: newGarrison });
+
+  // Create army at city location
+  const armyId = nextArmyId(factionId);
+  s = addArmy(s, {
+    id: armyId,
+    factionId,
+    generalId: order.generalId,
+    troops: deployTroops,
+    coord: city.coord,
+    target: null,
+    state: "idle",
+  });
+
+  s = addLogEntry(
+    s,
+    `${city.name} deployed army led by ${order.generalId}.`,
     "city",
     [factionId],
   );

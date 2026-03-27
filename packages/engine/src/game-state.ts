@@ -50,7 +50,7 @@ export function _resetCounters(): void {
   cityCounter = 0;
 }
 
-function nextArmyId(factionId: FactionId): ArmyId {
+export function nextArmyId(factionId: FactionId): ArmyId {
   armyCounter += 1;
   return `${factionId}-army-${armyCounter}`;
 }

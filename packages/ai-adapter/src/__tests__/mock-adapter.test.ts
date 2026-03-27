@@ -37,7 +37,7 @@ describe("MockAdapter", () => {
     expect(decision.cities.length).toBeGreaterThan(0);
     for (const order of decision.cities) {
       expect(order.cityId).toBeDefined();
-      expect(["train", "upgrade_walls", "upgrade_city", "idle"]).toContain(order.action);
+      expect(["train", "upgrade_walls", "upgrade_city", "deploy", "idle"]).toContain(order.action);
     }
   });
 

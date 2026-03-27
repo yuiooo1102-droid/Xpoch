@@ -173,9 +173,11 @@ export interface ArmyOrder {
 
 export interface CityOrder {
   readonly cityId: CityId;
-  readonly action: "train" | "upgrade_walls" | "upgrade_city" | "idle";
+  readonly action: "train" | "upgrade_walls" | "upgrade_city" | "deploy" | "idle";
   readonly troopType?: TroopType;
   readonly amount?: number;
+  readonly generalId?: GeneralId; // for deploy action
+  readonly troops?: Partial<Troops>; // for deploy action
 }
 
 export interface BuildOrder {

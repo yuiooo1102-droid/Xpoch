@@ -76,9 +76,12 @@ const BUILDING_CHAR: Record<string, string> = {
   fortress: `${ESC}[31m堡${RESET}`,
 };
 
+// Log categories to display (filter out training spam)
+const IMPORTANT_CATEGORIES = new Set(["combat", "economy", "tech", "diplomacy", "system", "territory"]);
+const TRAINING_PATTERN = /started training|finished training/i;
+
 // === Hex to Screen ===
 function hexToScreen(q: number, r: number, centerX: number, centerY: number): [number, number] {
-  // Flat-top hex: each hex is 3 chars wide, 2 chars tall
   const x = centerX + q * 3 + r * 1;
   const y = centerY + r * 1;
   return [Math.round(x), Math.round(y)];
@@ -87,8 +90,8 @@ function hexToScreen(q: number, r: number, centerX: number, centerY: number): [n
 // === Render Functions ===
 
 function renderMap(state: GameState, width: number, height: number): string[] {
-  const mapHeight = Math.min(height - 12, MAP_RADIUS * 2 + 3);
-  const mapWidth = Math.min(width - 35, MAP_RADIUS * 6 + 5);
+  const mapHeight = height;
+  const mapWidth = width;
   const centerX = Math.floor(mapWidth / 2);
   const centerY = Math.floor(mapHeight / 2);
 
@@ -126,12 +129,10 @@ function renderMap(state: GameState, width: number, height: number): string[] {
     const armies = armyAt.get(key);
 
     if (city) {
-      // City: show faction-colored city marker
       const fg = FACTION_FG[city.factionId] ?? "";
       const cap = city.isCapital ? "★" : "城";
       grid[sy][sx] = `${BOLD}${fg}${cap}${RESET}`;
     } else if (armies && armies.length > 0) {
-      // Army: show faction-colored troop indicator
       const army = armies[0];
       const fg = FACTION_FG[army.factionId] ?? "";
       const total = army.troops.infantry + army.troops.cavalry + army.troops.archer;
@@ -140,11 +141,9 @@ function renderMap(state: GameState, width: number, height: number): string[] {
     } else if (tile.building) {
       grid[sy][sx] = BUILDING_CHAR[tile.building] ?? "?";
     } else if (tile.owner) {
-      // Owned territory: dim faction-colored dot
       const fg = FACTION_FG[tile.owner] ?? "";
       grid[sy][sx] = `${DIM}${fg}░${RESET}`;
     } else {
-      // Neutral terrain
       grid[sy][sx] = TERRAIN_CHAR[tile.terrain] ?? " ";
     }
   }
@@ -152,14 +151,14 @@ function renderMap(state: GameState, width: number, height: number): string[] {
   return grid.map((row) => row.join(""));
 }
 
-function renderFactionPanel(state: GameState): string[] {
+function renderCompactFactionPanel(state: GameState, maxHeight: number): string[] {
   const lines: string[] = [];
-  lines.push(`${BOLD}━━━ 势力 ━━━${RESET}`);
 
   for (const [fid, f] of state.factions) {
     const fg = FACTION_FG[fid] ?? "";
     if (!f.alive) {
       lines.push(`${DIM}${fg}✗ ${f.name} [已灭]${RESET}`);
+      if (lines.length < maxHeight) lines.push("");
       continue;
     }
 
@@ -171,61 +170,81 @@ function renderFactionPanel(state: GameState): string[] {
     for (const a of armies) totalTroops += a.troops.infantry + a.troops.cavalry + a.troops.archer;
     for (const c of cities) totalTroops += c.garrison.infantry + c.garrison.cavalry + c.garrison.archer;
 
-    lines.push(`${BOLD}${fg}◆ ${f.name}${RESET}`);
-    lines.push(`  领地:${f.territoryCount} 城:${cities.length} 军:${armies.length} 兵:${totalTroops}`);
-    lines.push(`  金:${f.resources.gold} 粮:${f.resources.food} 木:${f.resources.wood} 铁:${f.resources.iron}`);
+    // Line 1: faction name with key stats
+    lines.push(
+      `${BOLD}${fg}◆ ${f.name}${RESET}`,
+    );
 
-    // Generals with skills
-    for (const g of generals) {
-      const def = GENERAL_DEF_MAP.get(g.defId);
-      const alive = g.alive ? `Lv${g.level}` : `☠`;
-      const skillName = def?.skill.name ?? "?";
-      lines.push(`  ${g.name}(${alive}) [${skillName}]`);
+    // Line 2: territory/cities/armies/troops
+    lines.push(
+      `  ${f.territoryCount}地 ${cities.length}城 ${armies.length}军 ${totalTroops}兵`,
+    );
+
+    // Line 3: resources
+    lines.push(
+      `  金:${f.resources.gold} 粮:${f.resources.food} 木:${f.resources.wood} 铁:${f.resources.iron}`,
+    );
+
+    // Line 4: generals (compact, names only)
+    const aliveGens = generals.filter((g) => g.alive);
+    const genNames = aliveGens.slice(0, 4).map((g) => g.name).join(" ");
+    const moreGens = aliveGens.length > 4 ? ` +${aliveGens.length - 4}` : "";
+    lines.push(`  将:${genNames}${moreGens} 技:${f.techs.length}`);
+
+    // Separator
+    if (lines.length < maxHeight) {
+      lines.push(`${DIM}──────────────────${RESET}`);
     }
-
-    // Tech count
-    lines.push(`  科技:${f.techs.length}`);
-    lines.push("");
   }
 
-  return lines;
+  return lines.slice(0, maxHeight);
 }
 
-function renderLog(state: GameState, maxLines: number): string[] {
-  const lines: string[] = [];
-  lines.push(`${BOLD}━━━ 战报 ━━━${RESET}`);
+function filterImportantLogs(state: GameState, maxEntries: number): string[] {
+  // Filter out training spam, only show important events
+  const important = state.log.filter((entry) => {
+    if (TRAINING_PATTERN.test(entry.message)) return false;
+    if (!IMPORTANT_CATEGORIES.has(entry.category) && entry.category !== "city") return false;
+    // Also filter out deploy messages as they're not critical
+    if (entry.message.includes("deployed army")) return false;
+    return true;
+  });
 
-  const recent = state.log.slice(-maxLines);
-  for (const entry of recent) {
-    const catIcon: Record<string, string> = {
-      combat: `${ESC}[31m⚔${RESET}`,
-      territory: `${ESC}[33m⊞${RESET}`,
-      tech: `${ESC}[36m⚗${RESET}`,
-      city: `${ESC}[35m♜${RESET}`,
-      economy: `${ESC}[32m$${RESET}`,
-      diplomacy: `${ESC}[34m☮${RESET}`,
-      system: `${ESC}[37m⚙${RESET}`,
-    };
+  const recent = important.slice(-maxEntries);
+  const catIcon: Record<string, string> = {
+    combat: `${ESC}[31m⚔${RESET}`,
+    territory: `${ESC}[33m⊞${RESET}`,
+    tech: `${ESC}[36m⚗${RESET}`,
+    city: `${ESC}[35m♜${RESET}`,
+    economy: `${ESC}[32m$${RESET}`,
+    diplomacy: `${ESC}[34m☮${RESET}`,
+    system: `${ESC}[37m⚙${RESET}`,
+  };
+
+  return recent.map((entry) => {
     const icon = catIcon[entry.category] ?? "?";
-    // Truncate long messages
-    const msg = entry.message.length > 40 ? entry.message.slice(0, 37) + "..." : entry.message;
-    lines.push(`${DIM}T${entry.tick}${RESET} ${icon} ${msg}`);
-  }
-
-  return lines;
+    const msg = entry.message.length > 35 ? entry.message.slice(0, 32) + "..." : entry.message;
+    return `T${entry.tick} ${icon} ${msg}`;
+  });
 }
 
 function render(state: GameState): void {
   const cols = process.stdout.columns || 120;
   const rows = process.stdout.rows || 40;
 
-  const sidebarWidth = 34;
-  const mapLines = renderMap(state, cols - sidebarWidth - 2, rows - 2);
-  const factionLines = renderFactionPanel(state);
-  const logMaxLines = rows - factionLines.length - 6;
-  const logLines = renderLog(state, Math.max(5, logMaxLines));
+  // Layout: bottom 3 lines for log + separator, top area split left/right
+  const logHeight = 3;
+  const titleHeight = 2; // title + separator
+  const legendHeight = 2; // legend + separator
+  const contentHeight = rows - titleHeight - legendHeight - logHeight - 1;
 
-  // Compose: map on left, sidebar on right
+  const sidebarWidth = 22;
+  const mapWidth = Math.min(cols - sidebarWidth - 3, MAP_RADIUS * 6 + 5);
+
+  const mapLines = renderMap(state, mapWidth, contentHeight);
+  const factionLines = renderCompactFactionPanel(state, contentHeight);
+  const logEntries = filterImportantLogs(state, logHeight);
+
   const output: string[] = [];
 
   // Title bar
@@ -235,22 +254,30 @@ function render(state: GameState): void {
   output.push(`${BOLD}${ESC}[33m  ⚔ 率土争霸·三国 ⚔  T${state.tick}${RESET}${winnerText}`);
   output.push(`${"─".repeat(cols)}`);
 
-  const sideLines = [...factionLines, "", ...logLines];
-  const maxHeight = Math.max(mapLines.length, sideLines.length);
-
+  // Main content: map on left, faction panel on right
+  const maxHeight = Math.max(mapLines.length, factionLines.length);
   for (let i = 0; i < maxHeight; i++) {
     const mapPart = mapLines[i] ?? "";
-    const sidePart = sideLines[i] ?? "";
-    // Pad map to fixed width (approximate, ANSI makes this imprecise)
+    const sidePart = factionLines[i] ?? "";
     output.push(`${mapPart}  │ ${sidePart}`);
   }
 
-  // Legend
+  // Bottom separator + log
   output.push(`${"─".repeat(cols)}`);
+
+  // Log as horizontal compact entries
+  if (logEntries.length > 0) {
+    for (const entry of logEntries) {
+      output.push(` ${entry}`);
+    }
+  } else {
+    output.push(` ${DIM}等待战报...${RESET}`);
+  }
+
+  // Legend
   output.push(
-    `${DIM} 地形: ${TERRAIN_CHAR["plains"]}平原 ${TERRAIN_CHAR["forest"]}森林 ${TERRAIN_CHAR["mountain"]}山地 ${TERRAIN_CHAR["water"]}水域 ${TERRAIN_CHAR["desert"]}沙漠` +
-    `  建筑: ${BUILDING_CHAR["farm"]} ${BUILDING_CHAR["lumber_mill"]} ${BUILDING_CHAR["mine"]} ${BUILDING_CHAR["market"]} ${BUILDING_CHAR["barracks"]} ${BUILDING_CHAR["watchtower"]} ${BUILDING_CHAR["fortress"]}` +
-    `  ★首都 城城池 ■大军 ●中军 •小军 ░领地${RESET}`,
+    `${DIM} ★首都 城城池 ■大军 ●中军 •小军 ░领地 ` +
+    `${TERRAIN_CHAR["plains"]}原 ${TERRAIN_CHAR["forest"]}林 ${TERRAIN_CHAR["mountain"]}山 ${TERRAIN_CHAR["water"]}水${RESET}`,
   );
 
   process.stdout.write(CLEAR + output.join("\n") + "\n");

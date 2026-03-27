@@ -5,7 +5,7 @@ export const MAP_SIZE = 12;
 
 // === Terrain Resources per tick ===
 export const TERRAIN_INCOME: Record<TerrainType, Partial<Resources>> = {
-  plains: { food: 2, gold: 1 },
+  plains: { food: 3, gold: 1 },
   forest: { wood: 2, gold: 1 },
   mountain: { iron: 2, gold: 1 },
   desert: { gold: 2 },
@@ -156,8 +156,8 @@ export const GENERAL_MAX_LEVEL = 10;
 export const EXP_PER_LEVEL = 100;
 
 // === City ===
-export const CAPITAL_DEFENSE = 8;
-export const CITY_DEFENSE = 4;
+export const CAPITAL_DEFENSE = 15;
+export const CITY_DEFENSE = 8;
 export const WALL_DEFENSE_PER_LEVEL = 3; // walls 0-3 → +0/+3/+6/+9
 export const MAX_CITY_LEVEL = 5;
 export const MAX_WALLS = 3;
@@ -181,7 +181,7 @@ export interface BuildingDef {
 }
 
 export const BUILDING_DEFS: Record<BuildingType, BuildingDef> = {
-  farm:        { type: "farm",        terrain: ["plains"],   cost: { gold: 3, food: 0, wood: 3, iron: 0 }, income: { food: 3 }, defenseBonus: 0, visionBonus: 0, requiresTech: null },
+  farm:        { type: "farm",        terrain: ["plains"],   cost: { gold: 3, food: 0, wood: 3, iron: 0 }, income: { food: 5 }, defenseBonus: 0, visionBonus: 0, requiresTech: null },
   lumber_mill: { type: "lumber_mill", terrain: ["forest"],   cost: { gold: 3, food: 0, wood: 0, iron: 2 }, income: { wood: 3 }, defenseBonus: 0, visionBonus: 0, requiresTech: null },
   mine:        { type: "mine",        terrain: ["mountain"], cost: { gold: 5, food: 0, wood: 3, iron: 0 }, income: { iron: 3 }, defenseBonus: 0, visionBonus: 0, requiresTech: "mining" },
   market:      { type: "market",      terrain: "any_land",   cost: { gold: 0, food: 0, wood: 5, iron: 2 }, income: { gold: 4 }, defenseBonus: 0, visionBonus: 0, requiresTech: "currency" },
@@ -218,8 +218,8 @@ export const TECH_TREE: readonly TechDef[] = [
 ];
 
 // === Starting Resources ===
-export const STARTING_RESOURCES: Resources = { gold: 30, food: 50, wood: 20, iron: 10 };
-export const STARTING_GARRISON: { infantry: number; cavalry: number; archer: number } = { infantry: 300, cavalry: 0, archer: 0 };
+export const STARTING_RESOURCES: Resources = { gold: 30, food: 80, wood: 20, iron: 10 };
+export const STARTING_GARRISON: { infantry: number; cavalry: number; archer: number } = { infantry: 500, cavalry: 100, archer: 100 };
 export const STARTING_ARMY_TROOPS: { infantry: number; cavalry: number; archer: number } = { infantry: 200, cavalry: 100, archer: 100 };
 
 // === Tick ===

@@ -16,9 +16,11 @@ import {
   WALL_UPGRADE_COST,
   MAX_CITY_LEVEL,
   MAX_WALLS,
+  MAX_ARMIES_PER_FACTION,
   TERRAIN_MOVEMENT_COST,
 } from "@xpoch/shared";
 import { hasTech } from "./tech-tree";
+import { getAvailableGenerals, getFactionArmies } from "./game-state";
 
 // === Types ===
 
@@ -65,8 +67,10 @@ export function validateArmyOrder(
       const targetTile = state.tiles.get(hexKey(order.target));
       if (!targetTile) return fail("Target hex does not exist");
 
+      // Only reject if FINAL destination is water — march system handles pathing
       if (targetTile.terrain === "water") {
-        return fail("Cannot march to water");
+        // Allow marching THROUGH water-adjacent paths, but not TO water
+        return fail("Cannot march to water tile");
       }
 
       return OK;
@@ -196,6 +200,38 @@ export function validateCityOrder(
       if (!canAfford(faction.resources, CITY_UPGRADE_COST)) {
         return fail("Not enough resources to upgrade city");
       }
+      return OK;
+    }
+
+    case "deploy": {
+      if (!order.generalId) return fail("Deploy requires a generalId");
+      if (!order.troops) return fail("Deploy requires troops specification");
+
+      // Check general is available
+      const availableGens = getAvailableGenerals(state, factionId);
+      const genAvailable = availableGens.some((g) => g.id === order.generalId);
+      if (!genAvailable) return fail("General is not available for deployment");
+
+      // Check army limit
+      const currentArmies = getFactionArmies(state, factionId);
+      if (currentArmies.length >= MAX_ARMIES_PER_FACTION) {
+        return fail("Maximum armies already deployed");
+      }
+
+      // Check garrison has enough troops
+      const reqInf = order.troops.infantry ?? 0;
+      const reqCav = order.troops.cavalry ?? 0;
+      const reqArc = order.troops.archer ?? 0;
+      if (reqInf > city.garrison.infantry ||
+          reqCav > city.garrison.cavalry ||
+          reqArc > city.garrison.archer) {
+        return fail("Not enough troops in garrison to deploy");
+      }
+
+      if (reqInf + reqCav + reqArc === 0) {
+        return fail("Must deploy at least some troops");
+      }
+
       return OK;
     }
 
